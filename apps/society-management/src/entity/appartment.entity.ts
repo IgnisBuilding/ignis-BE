@@ -1,21 +1,21 @@
 import { Entity, PrimaryGeneratedColumn, Column } from 'typeorm';
 
 @Entity()
-export class SocietyManagement {
+export class floor {
     @PrimaryGeneratedColumn()
     id: number;
     
     @Column()
-    name: string;
+    unit_number: string;
 
     @Column()
-    location: string;
+    floor_id: number;
+
+    @Column()
+    occupied: boolean;
 
     @Column()
     owner_id: number;
-
-    @Column()
-    brigade_id: number;
 
     @Column({ type: 'timestamp', default: () => 'CURRENT_TIMESTAMP' })
     created_at: Date;
