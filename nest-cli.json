@@ -37,6 +37,15 @@
         "tsConfigPath": "libs/database/tsconfig.lib.json"
       }
     },
+    "fire_safety": {
+      "type": "application",
+      "root": "apps/fire_safety",
+      "entryFile": "main",
+      "sourceRoot": "apps/fire_safety/src",
+      "compilerOptions": {
+        "tsConfigPath": "apps/fire_safety/tsconfig.app.json"
+      }
+    },
     "ignis-be": {
       "type": "application",
       "root": "apps/ignis-be",
