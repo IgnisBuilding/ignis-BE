@@ -37,6 +37,15 @@
         "tsConfigPath": "apps/ignis-be/tsconfig.app.json"
       }
     },
+    "metering": {
+      "type": "application",
+      "root": "apps/metering",
+      "entryFile": "main",
+      "sourceRoot": "apps/metering/src",
+      "compilerOptions": {
+        "tsConfigPath": "apps/metering/tsconfig.app.json"
+      }
+    },
     "society-management": {
       "type": "application",
       "root": "apps/society-management",

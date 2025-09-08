@@ -1,21 +1,18 @@
 import { Entity, PrimaryGeneratedColumn, Column } from 'typeorm';
 
 @Entity()
-export class floor {
+export class meter_reading {
     @PrimaryGeneratedColumn()
     id: number;
     
     @Column()
-    unit_number: string;
+    meter_id: number;
 
-    @Column()
-    floor_id: number;
+    @Column({type: 'float'})
+    value: number;
 
-    @Column({ type: 'boolean', default: false })
-    occupied: boolean;
-
-    @Column()
-    owner_id: number;
+   @Column({ type: 'date' })
+    time: string;
 
     @Column({ type: 'timestamp', default: () => 'CURRENT_TIMESTAMP' })
     created_at: Date;
