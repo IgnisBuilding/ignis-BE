@@ -73,6 +73,15 @@
         "tsConfigPath": "apps/metering/tsconfig.app.json"
       }
     },
+    "notifications": {
+      "type": "application",
+      "root": "apps/notifications",
+      "entryFile": "main",
+      "sourceRoot": "apps/notifications/src",
+      "compilerOptions": {
+        "tsConfigPath": "apps/notifications/tsconfig.app.json"
+      }
+    },
     "society-management": {
       "type": "application",
       "root": "apps/society-management",
