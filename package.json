@@ -17,7 +17,12 @@
     "test:watch": "jest --watch",
     "test:cov": "jest --coverage",
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
-    "test:e2e": "jest --config ./apps/ignis-be/test/jest-e2e.json"
+    "test:e2e": "jest --config ./apps/ignis-be/test/jest-e2e.json",
+    "typeorm": "typeorm-ts-node-commonjs",
+    "migrate:generate": "typeorm-ts-node-commonjs migration:generate -d ./data_source.ts",
+    "migrate:up": "typeorm-ts-node-commonjs migration:run -d ./data_source.ts",
+    "migrate:down": "typeorm-ts-node-commonjs migration:revert -d ./data_source.ts",
+    "migrate:status": "psql -U postgres -d ignis -c \"SELECT name FROM typeorm_migrations ORDER BY id DESC;\""
   },
   "dependencies": {
     "@nestjs/common": "^11.0.1",
@@ -25,6 +30,7 @@
     "@nestjs/core": "^11.0.1",
     "@nestjs/platform-express": "^11.0.1",
     "@nestjs/typeorm": "^11.0.0",
+    "nestjs-console": "^10.0.0",
     "pg": "^8.16.3",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1",

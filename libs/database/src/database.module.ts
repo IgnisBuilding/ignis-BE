@@ -28,8 +28,9 @@ import {sensor_log} from './entities/sensor_log.entity';
       password: process.env.DB_PASS,
       database: process.env.DB_NAME,
       entities: [Society, ammenity, payment],
-      synchronize: true,
-      logging: true
+      synchronize: false,
+      logging: true,
+      migrations: [__dirname + '/migrations/*.ts']
     })
   ]
 })
