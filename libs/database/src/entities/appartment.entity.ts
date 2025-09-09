@@ -1,21 +1,21 @@
 import { Entity, PrimaryGeneratedColumn, Column } from 'typeorm';
 
 @Entity()
-export class payment {
+export class appartment {
     @PrimaryGeneratedColumn()
     id: number;
     
     @Column()
-    bill_id: number;
+    unit_number: string;
 
     @Column()
-    user_id: number;
-
-    @Column({ type: 'date'})
-    split_amount: number;
+    floor_id: number;
 
     @Column({ type: 'boolean', default: false })
-    paid: boolean;
+    occupied: boolean;
+
+    @Column()
+    owner_id: number;
 
     @Column({ type: 'timestamp', default: () => 'CURRENT_TIMESTAMP' })
     created_at: Date;

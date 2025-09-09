@@ -1,21 +1,21 @@
 import { Entity, PrimaryGeneratedColumn, Column } from 'typeorm';
 
 @Entity()
-export class floor {
+export class bill_split {
     @PrimaryGeneratedColumn()
     id: number;
     
     @Column()
-    unit_number: string;
+    bill_id: number;
 
     @Column()
-    floor_id: number;
+    user_id: number;
+
+    @Column({ type: 'date'})
+    split_amount: number;
 
     @Column({ type: 'boolean', default: false })
-    occupied: boolean;
-
-    @Column()
-    owner_id: number;
+    paid: boolean;
 
     @Column({ type: 'timestamp', default: () => 'CURRENT_TIMESTAMP' })
     created_at: Date;

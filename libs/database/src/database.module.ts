@@ -1,24 +1,35 @@
 import { Module } from '@nestjs/common';
 import { DatabaseService } from './database.service';
 import { TypeOrmModule } from '@nestjs/typeorm';
-
-
+import { ConfigModule } from '@nestjs/config';
+import { Society } from './entities/society.entity';
+import { ammenity } from './entities/notification.entity';
+import { payment } from './entities/payment.entity';
+import {bill} from './entities/bill.entity';
+import {appartment} from './entities/appartment.entity';
+import {bill_split} from './entities/bill_split.entity';
+import { building } from './entities/building.entity';
+import { floor } from './entities/floor.entity';
+import { incident_log } from './entities/incident_log.entity';
+import { meter } from './entities/meter.entity';
+import {meter_reading} from './entities/meter_reading.entity';
+import {sensor} from './entities/sensor.entity';
+import {sensor_log} from './entities/sensor_log.entity';
 @Module({
   imports :[
+    ConfigModule.forRoot({
+      isGlobal: true,
+    }),
     TypeOrmModule.forRoot({
       type: 'postgres',
       host: process.env.DB_HOST,
       port: parseInt(process.env.DB_PORT || '5432', 10),
-      username: process.env.DB_USERNAME,
-      password: process.env.DB_PASSWORD,
+      username: process.env.DB_USER,
+      password: process.env.DB_PASS,
       database: process.env.DB_NAME,
-      // 👇 Entities tell TypeORM how your schema should look
-      entities: [__dirname + '/../**/*.entity{.ts,.js}'],
-
-      // 👇 Migrations tell TypeORM how to safely apply schema changes
-      migrations: [__dirname + '/../migrations/*{.ts,.js}'],
-      autoLoadEntities: true,
-      synchronize: false,
+      entities: [Society, ammenity, payment],
+      synchronize: true,
+      logging: true
     })
   ]
 })
