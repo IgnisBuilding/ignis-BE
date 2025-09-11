@@ -3,7 +3,7 @@ import { DatabaseService } from './database.service';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ConfigModule } from '@nestjs/config';
 import { Society } from './entities/society.entity';
-import { ammenity } from './entities/notification.entity';
+import { notification } from './entities/notification.entity';
 import { payment } from './entities/payment.entity';
 import {bill} from './entities/bill.entity';
 import {appartment} from './entities/appartment.entity';
@@ -27,7 +27,7 @@ import {sensor_log} from './entities/sensor_log.entity';
       username: process.env.DB_USER,
       password: process.env.DB_PASS,
       database: process.env.DB_NAME,
-      entities: [Society, ammenity, payment],
+      entities: [Society, notification, payment],
       synchronize: false,
       logging: true,
       migrations: [__dirname + '/migrations/*.ts']
