@@ -1,27 +1,21 @@
 import { Entity, PrimaryGeneratedColumn, Column } from 'typeorm';
 
 @Entity()
-export class incident_log {
+export class nodes {
     @PrimaryGeneratedColumn()
     id: number;
-    
-    @Column()
-    type: number;
 
     @Column()
-    description: string;
-
-    @Column({ type: 'date'})
-    reason: string;
-
-    @Column({ type: 'date'})
-    severity: string;
-
-    @Column({ type: 'date'})
-    apartment_id: number;
-
-    @Column({ type: 'date'})
     floor_id: number;
+
+    @Column()
+    room_id: number;
+
+    @Column()
+    type: string;
+
+    @Column({ type: 'geometry', spatialFeatureType: 'Point', srid: 3857})
+    geometry: string;
 
     @Column({ type: 'timestamp', default: () => 'CURRENT_TIMESTAMP' })
     created_at: Date;

@@ -19,7 +19,8 @@
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
     "test:e2e": "jest --config ./apps/ignis-be/test/jest-e2e.json",
     "typeorm": "typeorm-ts-node-commonjs",
-    "migrate:generate": "typeorm-ts-node-commonjs migration:generate -d ./data_source.ts",
+    "migrate:create": "node -e \"const n=process.argv[1]; const {execSync}=require('child_process'); execSync(`typeorm-ts-node-commonjs migration:create ./libs/database/src/migrations/${n}`, {stdio:'inherit'})\"",
+    "migrate:generate": "node -e \"const n=process.argv[1]; const {execSync}=require('child_process'); execSync(`typeorm-ts-node-commonjs migration:generate -d ./data_source.ts ./libs/database/src/migrations/${n}`, {stdio:'inherit'})\"",
     "migrate:up": "typeorm-ts-node-commonjs migration:run -d ./data_source.ts",
     "migrate:down": "typeorm-ts-node-commonjs migration:revert -d ./data_source.ts",
     "migrate:status": "psql -U postgres -d ignis -c \"SELECT name FROM typeorm_migrations ORDER BY id DESC;\""

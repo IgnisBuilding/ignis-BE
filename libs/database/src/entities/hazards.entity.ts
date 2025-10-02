@@ -1,27 +1,26 @@
-import { Entity, PrimaryGeneratedColumn, Column } from 'typeorm';
+import { Entity, PrimaryGeneratedColumn, Column, JoinColumn, ManyToOne } from 'typeorm';
+import { nodes } from './nodes.entity';
 
 @Entity()
-export class incident_log {
+export class hazards {
     @PrimaryGeneratedColumn()
     id: number;
     
     @Column()
-    type: number;
+    type: string;
 
     @Column()
-    description: string;
-
-    @Column({ type: 'date'})
-    reason: string;
-
-    @Column({ type: 'date'})
-    severity: string;
-
-    @Column({ type: 'date'})
     apartment_id: number;
 
-    @Column({ type: 'date'})
-    floor_id: number;
+    @ManyToOne(() => nodes)
+    @JoinColumn({ name: 'node_id' })
+    node_id: nodes;
+
+    @Column()
+    severity: string;
+
+    @Column()
+    status: string;
 
     @Column({ type: 'timestamp', default: () => 'CURRENT_TIMESTAMP' })
     created_at: Date;

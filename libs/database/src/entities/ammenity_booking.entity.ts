@@ -1,7 +1,7 @@
 import { Entity, PrimaryGeneratedColumn, Column } from 'typeorm';
 
 @Entity()
-export class ammenity {
+export class ammenity_booking {
     @PrimaryGeneratedColumn()
     id: number;
     
