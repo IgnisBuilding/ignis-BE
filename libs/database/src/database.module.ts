@@ -6,7 +6,7 @@ import { Society } from './entities/society.entity';
 import { notification } from './entities/notification.entity';
 import { payment } from './entities/payment.entity';
 import {bill} from './entities/bill.entity';
-import {appartment} from './entities/apartment.entity';
+import {apartment} from './entities/apartment.entity';
 import {bill_split} from './entities/bill_split.entity';
 import { building } from './entities/building.entity';
 import { floor } from './entities/floor.entity';
@@ -32,7 +32,7 @@ import { hazards } from './entities/hazards.entity';
       username: process.env.DB_USER,
       password: process.env.DB_PASS,
       database: process.env.DB_NAME,
-      entities: [Society, notification, payment, bill, appartment, bill_split, building, floor, incident_log, meter, meter_reading, sensor, sensor_log, nodes, exits, edges, hazards],
+      entities: [Society, notification, payment, bill, apartment, bill_split, building, floor, incident_log, meter, meter_reading, sensor, sensor_log, nodes, exits, edges, hazards],
       synchronize: false,
       logging: true,
       migrations: [__dirname + '/migrations/*.ts']
