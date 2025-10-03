@@ -8,6 +8,9 @@ export class floor {
     @Column()
     name: string;
 
+    @Column('integer')
+    level: number;
+
     @Column()
     building_id: number;
 
