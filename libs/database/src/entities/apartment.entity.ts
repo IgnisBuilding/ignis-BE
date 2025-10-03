@@ -1,19 +1,22 @@
-import { Entity, PrimaryGeneratedColumn, Column } from 'typeorm';
+import { Entity, PrimaryGeneratedColumn, Column, JoinColumn, ManyToOne } from 'typeorm';
+import { floor } from './floor.entity';
 
 @Entity()
-export class appartment {
+export class apartment {
     @PrimaryGeneratedColumn()
     id: number;
     
     @Column()
     unit_number: string;
 
-    @Column()
-    floor_id: number;
+    @ManyToOne(()=>floor)
+    @JoinColumn({ name: 'floor_id' })
+    floor_id: floor;
 
     @Column({ type: 'boolean', default: false })
     occupied: boolean;
 
+    //Needed to be updated when user table is created
     @Column()
     owner_id: number;
 

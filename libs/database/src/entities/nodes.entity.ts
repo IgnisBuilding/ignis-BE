@@ -1,15 +1,18 @@
-import { Entity, PrimaryGeneratedColumn, Column } from 'typeorm';
-
+import { Entity, PrimaryGeneratedColumn, Column, JoinColumn, ManyToOne } from 'typeorm';
+import { floor } from './floor.entity';
+import { apartment } from './apartment.entity';
 @Entity()
 export class nodes {
     @PrimaryGeneratedColumn()
     id: number;
 
-    @Column()
-    floor_id: number;
+    @ManyToOne(()=>floor)
+    @JoinColumn({ name: 'floor_id' })
+    floor_id: floor;
 
-    @Column()
-    room_id: number;
+    @ManyToOne(()=>apartment)
+    @JoinColumn({ name: 'apartment_id' })
+    apartment_id: apartment;
 
     @Column()
     type: string;

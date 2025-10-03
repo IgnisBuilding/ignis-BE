@@ -1,5 +1,6 @@
 import { Entity, PrimaryGeneratedColumn, Column, JoinColumn, ManyToOne } from 'typeorm';
 import { nodes } from './nodes.entity';
+import { floor } from './floor.entity';
 @Entity()
 export class exits {
     @PrimaryGeneratedColumn()
@@ -9,8 +10,9 @@ export class exits {
     @JoinColumn({ name: 'node_id' })
     node_id: nodes;
 
-    @Column()
-    floor_id: number;
+    @ManyToOne(()=>floor)
+    @JoinColumn({ name: 'floor_id' })
+    floor_id: floor;
 
     @Column()
     type: string;
