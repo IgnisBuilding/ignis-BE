@@ -7,12 +7,12 @@ export class edges {
     id: number;
     
     @ManyToOne(()=>nodes)
-    @JoinColumn({ name: 'source' })
+    @JoinColumn({ name: 'source_id' })
     source: nodes;
 
     @ManyToOne(()=>nodes)
-    @JoinColumn({ name: 'source' })
-    target: number;
+    @JoinColumn({ name: 'target_id' })
+    target: nodes;
 
     @Column()
     cost: number;

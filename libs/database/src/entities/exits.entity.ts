@@ -8,11 +8,11 @@ export class exits {
     
     @ManyToOne(()=>nodes)
     @JoinColumn({ name: 'node_id' })
-    node_id: nodes;
+    node: nodes;
 
     @ManyToOne(()=>floor)
     @JoinColumn({ name: 'floor_id' })
-    floor_id: floor;
+    floor: floor;
 
     @Column()
     type: string;

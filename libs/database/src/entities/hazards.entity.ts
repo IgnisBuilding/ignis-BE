@@ -12,11 +12,11 @@ export class hazards {
 
     @ManyToOne(() => apartment)
     @JoinColumn({ name: 'apartment_id' })
-    apartment_id: apartment;
+    apartment: apartment;
 
     @ManyToOne(() => nodes)
     @JoinColumn({ name: 'node_id' })
-    node_id: nodes;
+    node: nodes;
 
     @Column()
     severity: string;

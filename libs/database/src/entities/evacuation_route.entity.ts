@@ -7,11 +7,11 @@ export class evacuation_route {
     id: number;
     
     @ManyToOne(()=> nodes)
-    @JoinColumn({ name: 'start_node' })
+    @JoinColumn({ name: 'start_node_id' })
     start_node: nodes;
 
     @ManyToOne(()=> nodes)
-    @JoinColumn({ name: 'start_node' })
+    @JoinColumn({ name: 'end_node_id' })
     end_node: nodes;
 
     @Column({ type: 'geometry', spatialFeatureType: 'LineString', srid: 3857})

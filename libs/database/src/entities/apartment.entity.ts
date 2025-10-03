@@ -11,7 +11,7 @@ export class apartment {
 
     @ManyToOne(()=>floor)
     @JoinColumn({ name: 'floor_id' })
-    floor_id: floor;
+    floor: floor;
 
     @Column({ type: 'boolean', default: false })
     occupied: boolean;
