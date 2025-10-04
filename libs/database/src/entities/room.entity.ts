@@ -1,5 +1,6 @@
 import { Entity, PrimaryGeneratedColumn, Column, JoinColumn, ManyToOne } from 'typeorm';
 import { apartment } from './apartment.entity';
+import { floor } from './floor.entity';
 
 @Entity()
 export class room {
@@ -13,8 +14,15 @@ export class room {
     @JoinColumn({ name: 'apartment_id' })
     apartment: apartment;
 
+    @ManyToOne(()=>floor)
+    @JoinColumn({ name: 'floor_id' })
+    floor: floor;
+
     @Column()
     type: string;
+
+    @Column({ type: 'geometry', spatialFeatureType: 'Polygon', srid: 3857})
+    geometry: string;
 
     @Column({ type: 'timestamp', default: () => 'CURRENT_TIMESTAMP' })
     created_at: Date;
