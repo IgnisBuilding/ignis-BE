@@ -1,39 +1,25 @@
 {
   "compilerOptions": {
-    "module": "nodenext",
-    "moduleResolution": "nodenext",
-    "resolvePackageJsonExports": true,
-    "esModuleInterop": true,
-    "isolatedModules": true,
+    "module": "commonjs",
     "declaration": true,
     "removeComments": true,
     "emitDecoratorMetadata": true,
     "experimentalDecorators": true,
     "allowSyntheticDefaultImports": true,
-    "target": "ES2023",
+    "target": "es2017",
     "sourceMap": true,
     "outDir": "./dist",
-    "baseUrl": "./",
+    "baseUrl": ".",
     "incremental": true,
     "skipLibCheck": true,
-    "strictNullChecks": true,
-    "forceConsistentCasingInFileNames": true,
+    "strictNullChecks": false,
     "noImplicitAny": false,
     "strictBindCallApply": false,
+    "forceConsistentCasingInFileNames": false,
     "noFallthroughCasesInSwitch": false,
     "paths": {
-      "@app/auth": [
-        "libs/auth/src"
-      ],
-      "@app/auth/*": [
-        "libs/auth/src/*"
-      ],
-      "@app/database": [
-        "libs/database/src"
-      ],
-      "@app/database/*": [
-        "libs/database/src/*"
-      ]
+      "@app/entities": ["libs/database/src/entities"],
+      "@app/entities/*": ["libs/database/src/entities/*"]
     }
   }
 }

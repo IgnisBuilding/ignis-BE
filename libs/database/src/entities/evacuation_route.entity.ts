@@ -1,28 +1,28 @@
 import { Entity, PrimaryGeneratedColumn, Column, JoinColumn, ManyToOne } from 'typeorm';
-import { nodes } from './nodes.entity';
+import { Node } from './nodes.entity';
 
-@Entity()
-export class evacuation_route {
+@Entity('evacuation_route')
+export class EvacuationRoute {
     @PrimaryGeneratedColumn()
     id: number;
     
-    @ManyToOne(()=> nodes)
+    @ManyToOne(()=> Node, { eager: false })
     @JoinColumn({ name: 'start_node_id' })
-    start_node: nodes;
+    startNode: Node;
 
-    @ManyToOne(()=> nodes)
+    @ManyToOne(()=> Node, { eager: false })
     @JoinColumn({ name: 'end_node_id' })
-    end_node: nodes;
+    endNode: Node;
 
     @Column({ type: 'geometry', spatialFeatureType: 'LineString', srid: 3857})
     path: string;
 
-    @Column()
-    assigned_to: number;
+    @Column({ name: 'assigned_to', nullable: true })
+    assignedTo: number;
 
-    @Column({ type: 'timestamp', default: () => 'CURRENT_TIMESTAMP' })
-    created_at: Date;
+    @Column({ name: 'created_at', type: 'timestamp', default: () => 'CURRENT_TIMESTAMP' })
+    createdAt: Date;
 
-    @Column({ type: 'timestamp', default: () => 'CURRENT_TIMESTAMP', onUpdate: 'CURRENT_TIMESTAMP' })
-    updated_at: Date;
+    @Column({ name: 'updated_at', type: 'timestamp', default: () => 'CURRENT_TIMESTAMP', onUpdate: 'CURRENT_TIMESTAMP' })
+    updatedAt: Date;
 }  

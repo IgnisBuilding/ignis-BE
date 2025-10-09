@@ -2,7 +2,7 @@ import { Entity, PrimaryGeneratedColumn, Column, JoinColumn, ManyToOne } from 't
 import { floor } from './floor.entity';
 import { apartment } from './apartment.entity';
 @Entity()
-export class nodes {
+export class Node {
     @PrimaryGeneratedColumn()
     id: number;
 
