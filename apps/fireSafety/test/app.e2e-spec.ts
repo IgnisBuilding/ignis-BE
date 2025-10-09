@@ -1,7 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { INestApplication } from '@nestjs/common';
 import * as request from 'supertest';
-import { FireSafetyModule } from './../src/fire_safety.module';
+import { FireSafetyModule } from '../src/fire_safety.module';
 
 describe('FireSafetyController (e2e)', () => {
   let app: INestApplication;

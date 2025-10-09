@@ -10,7 +10,7 @@ import {
 import { FireSafetyService } from './fire_safety.service';
 import { CreateRouteDto } from './dto/CreateRoute.dto';
 
-@Controller('fire-safety')
+@Controller('fireSafety')
 export class FireSafetyController {
   constructor(private readonly fireSafetyService: FireSafetyService) {}
 

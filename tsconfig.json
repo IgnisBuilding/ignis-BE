@@ -19,7 +19,8 @@
     "noFallthroughCasesInSwitch": false,
     "paths": {
       "@app/entities": ["libs/database/src/entities"],
-      "@app/entities/*": ["libs/database/src/entities/*"]
+      "@app/entities/*": ["libs/database/src/entities/*"],
+      "@app/database": ["libs/database/src"],
     }
   }
 }

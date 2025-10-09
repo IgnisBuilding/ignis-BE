@@ -1,18 +1,18 @@
 import { Entity, PrimaryGeneratedColumn, Column, JoinColumn, ManyToOne } from 'typeorm';
-import { Node } from './nodes.entity';
+import { nodes } from './nodes.entity';
 
 @Entity()
-export class Edge {
+export class edges {
     @PrimaryGeneratedColumn()
     id: number;
     
-    @ManyToOne(()=>Node)
+    @ManyToOne(()=>nodes)
     @JoinColumn({ name: 'source_id' })
-    source: Node;
+    source: nodes;
 
-    @ManyToOne(()=>Node)
+    @ManyToOne(()=>nodes)
     @JoinColumn({ name: 'target_id' })
-    target: Node;
+    target: nodes;
 
     @Column()
     cost: number;
