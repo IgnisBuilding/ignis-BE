@@ -19,6 +19,7 @@ import {nodes} from './entities/nodes.entity';
 import { exits } from './entities/exits.entity';
 import { edges } from './entities/edges.entity';
 import { hazards } from './entities/hazards.entity';
+import { EvacuationRoute } from './entities/evacuation_route.entity';
 
 @Module({
   imports :[
@@ -32,7 +33,7 @@ import { hazards } from './entities/hazards.entity';
       username: process.env.DB_USER,
       password: process.env.DB_PASS,
       database: process.env.DB_NAME,
-      entities: [Society, notification, payment, bill, apartment, bill_split, building, floor, incident_log, meter, meter_reading, sensor, sensor_log, nodes, exits, edges, hazards],
+      entities: [Society, notification, payment, bill, apartment, bill_split, building, floor, incident_log, meter, meter_reading, sensor, sensor_log, nodes, exits, edges, hazards, EvacuationRoute],
       synchronize: false,
       logging: true,
       migrations: [__dirname + '/migrations/*.ts']
