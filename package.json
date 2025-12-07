@@ -26,18 +26,19 @@
     "migrate:status": "psql -U postgres -d ignis -c \"SELECT name FROM typeorm_migrations ORDER BY id DESC;\""
   },
   "dependencies": {
-  "socket.io": "^4.6.1",
-    "@nestjs/common": "^11.0.1",
+    "@nestjs/common": "^11.1.7",
     "@nestjs/config": "^4.0.2",
-    "@nestjs/core": "^11.0.1",
-    "@nestjs/platform-express": "^11.0.1",
+    "@nestjs/core": "^11.1.7",
+    "@nestjs/platform-express": "^11.1.7",
     "@nestjs/typeorm": "^11.0.0",
+    "@supabase/supabase-js": "^2.76.1",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.14.2",
     "nestjs-console": "^10.0.0",
     "pg": "^8.16.3",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1",
+    "socket.io": "^4.6.1",
     "typeorm": "^0.3.26"
   },
   "devDependencies": {
@@ -45,7 +46,7 @@
     "@eslint/js": "^9.18.0",
     "@nestjs/cli": "^11.0.0",
     "@nestjs/schematics": "^11.0.0",
-    "@nestjs/testing": "^11.0.1",
+    "@nestjs/testing": "^11.1.7",
     "@types/express": "^5.0.0",
     "@types/jest": "^30.0.0",
     "@types/node": "^22.10.7",

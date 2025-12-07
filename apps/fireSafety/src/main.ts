@@ -9,6 +9,6 @@ async function bootstrap() {
   app.useGlobalPipes(new ValidationPipe());
 
   // The port is defined here!
-  await app.listen(3000);
+  await app.listen(7000);
 }
 bootstrap();

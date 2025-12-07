@@ -6,10 +6,13 @@ import {
   Param,
   Delete,
   ParseIntPipe,
+  BadRequestException,
 } from '@nestjs/common';
 import { FireSafetyService } from './fire_safety.service';
 import { CreateRouteDto } from './dto/CreateRoute.dto';
 import { DataSource } from 'typeorm';
+import { PlaceFiresDto } from './dto/PlaceFires.dto';
+import { FindSafestPointDto } from './dto/FindSafestPoint.dto';
 
 @Controller('fireSafety')
 export class FireSafetyController {
@@ -312,7 +315,92 @@ export class FireSafetyController {
       return [];
     }
   }
+  /**
+   * POST /fireSafety/place-fires
+   * Creates hazard records for manually placed fire zones
+   * Returns hazard IDs for tracking
+   */
+  @Post('place-fires')
+  async placeFires(@Body() dto: PlaceFiresDto) {
+    try {
+      const hazardIds = [];
 
+      // Insert hazard for each fire zone
+      for (const zone of dto.fireZones) {
+        // Get apartment_id for the node
+        const apartmentQuery = `SELECT apartment_id FROM nodes WHERE id = $1`;
+        const apartmentResult = await this.dataSource.query(apartmentQuery, [
+          zone.nodeId,
+        ]);
+
+        const apartmentId =
+          apartmentResult && apartmentResult[0]
+            ? apartmentResult[0].apartment_id
+            : null;
+
+        // Insert hazard record
+        const insertQuery = `
+            INSERT INTO hazards (node_id, type, severity, status, apartment_id, created_at, updated_at)
+            VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            RETURNING id
+          `;
+
+        const result = await this.dataSource.query(insertQuery, [
+          zone.nodeId,
+          dto.type,
+          dto.severity,
+          dto.status,
+          apartmentId,
+        ]);
+
+        if (result && result[0]) {
+          hazardIds.push(result[0].id);
+        }
+      }
+
+      return {
+        success: true,
+        message: `${dto.fireZones.length} fire zone(s) placed successfully`,
+        hazardIds: hazardIds,
+        count: hazardIds.length,
+      };
+    } catch (error) {
+      console.error('Error placing fire zones:', error);
+      throw new BadRequestException(
+        `Failed to place fire zones: ${error.message}`,
+      );
+    }
+  }
+
+  /**
+   * POST /fireSafety/clear-fires
+   * Clears all manual fire hazards (status = ACTIVE, type = manual_fire)
+   */
+  @Post('clear-fires')
+  async clearFires() {
+    try {
+      // Delete all active manual fires
+      const deleteQuery = `
+          DELETE FROM hazards 
+          WHERE type = 'manual_fire' AND status = 'ACTIVE'
+          RETURNING id
+        `;
+
+      const result = await this.dataSource.query(deleteQuery);
+      const deletedCount = result ? result.length : 0;
+
+      return {
+        success: true,
+        message: `${deletedCount} fire zone(s) cleared successfully`,
+        deletedCount: deletedCount,
+      };
+    } catch (error) {
+      console.error('Error clearing fire zones:', error);
+      throw new BadRequestException(
+        `Failed to clear fire zones: ${error.message}`,
+      );
+    }
+  }
   // Simple occupancy endpoint — returns a number of occupants (placeholder logic)
   @Get('occupancy')
   async getOccupancy() {
@@ -325,154 +413,32 @@ export class FireSafetyController {
     }
   }
 
+  /**
+   * POST /fireSafety/compute
+   * Computes evacuation route using advanced multi-algorithm approach
+   *
+   * Features:
+   * - Dijkstra with hazard-aware dynamic costs (primary)
+   * - A* heuristic algorithm (fallback 1)
+   * - K-Shortest Paths with alternatives (fallback 2)
+   * - Automatic fire zone exclusion
+   * - Dynamic cost adjustment based on proximity to fire
+   *
+   * @param createRouteDto - Contains startNodeId, endNodeId, optional assignedTo
+   * @returns GeoJSON FeatureCollection with computed route
+   */
   @Post('compute')
   async compute(@Body() createRouteDto: CreateRouteDto) {
-    const { startNodeId, endNodeId } = createRouteDto;
-
-    // First, check whether the start or end node is currently marked as a
-    // hazard (status <> 'CLEARED'). If so, we cannot produce a safe path to
-    // or from that node and should return a clear error to the client.
-    const blocked = await this.dataSource.query(
-      `SELECT node_id, status FROM hazards WHERE status <> 'CLEARED' AND node_id IN ($1, $2)`,
-      [startNodeId, endNodeId],
-    );
-    if (blocked && blocked.length > 0) {
-      // Determine which endpoint(s) are blocked to provide a better message
-      const blockedNodes = blocked.map((b: any) => b.node_id);
-      if (
-        blockedNodes.includes(startNodeId) &&
-        blockedNodes.includes(endNodeId)
-      ) {
-        return {
-          error: true,
-          message:
-            'Both start and end nodes are affected by active hazards; no safe route can be computed.',
-        };
-      }
-      if (blockedNodes.includes(startNodeId)) {
-        return {
-          error: true,
-          message:
-            'Start node is affected by an active hazard; cannot compute a safe route.',
-        };
-      }
-      if (blockedNodes.includes(endNodeId)) {
-        // Try to find an alternative safe exit (node.type = 'exit') that is not
-        // affected by an active hazard, compute a hazard-aware path to it,
-        // and return that as an alternative.
-        const safeExits = await this.dataSource.query(
-          `SELECT id FROM nodes WHERE type = 'exit' AND id NOT IN (SELECT node_id FROM hazards WHERE status <> 'CLEARED')`,
-        );
-
-        if (!safeExits || safeExits.length === 0) {
-          return {
-            error: true,
-            message:
-              'End node is affected by an active hazard and no safe exits are available.',
-          };
-        }
-
-        // For each safe exit, attempt to compute a hazard-aware path and pick the shortest
-        let best = null as any;
-        for (const ex of safeExits) {
-          const exitId = ex.id;
-          const pathWkt = await this.fireSafetyService.getPathWktIfExists(
-            startNodeId,
-            exitId,
-            false,
-          );
-          if (!pathWkt) continue;
-          // compute length
-          const lenRes = await this.dataSource.query(
-            `SELECT ST_Length(ST_GeomFromText($1,3857)) AS len`,
-            [pathWkt],
-          );
-          const len = lenRes && lenRes[0] ? lenRes[0].len : null;
-          if (len === null) continue;
-          if (!best || len < best.len) {
-            best = { exitId, pathWkt, len };
-          }
-        }
-
-        if (!best) {
-          return {
-            error: true,
-            message:
-              'End node is affected by an active hazard and no alternative hazard-free routes could be computed.',
-          };
-        }
-
-        // Return GeoJSON for the chosen alternative without persisting it (client can accept it)
-        const fakeInsert = await this.dataSource.query(
-          `SELECT json_build_object('type','FeatureCollection','features', json_agg(json_build_object('type','Feature','geometry', ST_AsGeoJSON(ST_Transform(ST_GeomFromText($1,3857),4326))::json,'properties', json_build_object('altTargetNodeId', $2, 'distance', $3)))) AS geojson`,
-          [best.pathWkt, best.exitId, best.len],
-        );
-
-        return {
-          alternative: true,
-          targetNodeId: best.exitId,
-          geojson: fakeInsert && fakeInsert[0] ? fakeInsert[0].geojson : null,
-        };
-      }
-    }
-
-    // Try to return an already computed route for this pair (both orderings)
-    const stored = await this.dataSource.query(
-      `
-      SELECT id FROM evacuation_route WHERE (start_node_id = $1 AND end_node_id = $2) OR (start_node_id = $2 AND end_node_id = $1) LIMIT 1
-    `,
-      [startNodeId, endNodeId],
-    );
-
-    if (stored && stored[0] && stored[0].id) {
-      const routeId = stored[0].id;
-
-      // Check if any active hazard geometries intersect the stored route path.
-      const hazardIntersect = await this.dataSource.query(
-        `
-          SELECT 1 FROM hazards h
-          JOIN nodes n ON n.id = h.node_id
-          JOIN evacuation_route er ON er.id = $1
-          WHERE h.status <> 'CLEARED' AND ST_Intersects(n.geometry, er.path)
-          LIMIT 1
-        `,
-        [routeId],
-      );
-
-      if (hazardIntersect && hazardIntersect.length > 0) {
-        // Stored route intersects an active hazard: attempt to compute a
-        // hazard-aware replacement route. If compute succeeds it will insert
-        // a new evacuation_route; remove the old one to avoid duplicates.
-        try {
-          const newGeo =
-            await this.fireSafetyService.computeAndSavePath(createRouteDto);
-          // delete old route record
-          console.log(newGeo);
-          await this.dataSource.query(
-            'DELETE FROM evacuation_route WHERE id = $1',
-            [routeId],
-          );
-          return newGeo;
-        } catch (err) {
-          // If we couldn't compute a safe alternative, return the stored route
-          // but mark it as intersecting hazards so the client can decide how to
-          // present it (e.g., show with warning or refuse to use it).
-          const storedGeo =
-            await this.fireSafetyService.getRouteAsGeoJSON(routeId);
-          return {
-            warning: true,
-            message: 'Stored route intersects active hazards',
-            geojson: storedGeo,
-          };
-        }
-      }
-
-      // No hazard intersection -> return stored route GeoJSON
-      return this.fireSafetyService.getRouteAsGeoJSON(routeId);
-    }
-
-    // Otherwise compute a new path and save it
-    return this.fireSafetyService.computeAndSavePath(createRouteDto);
+    // Use the new enhanced service with 3-algorithm fallback and hazard-aware costs
+    // The service automatically:
+    // 1. Validates nodes exist
+    // 2. Checks if start/end are fire zones (throws error if they are)
+    // 3. Tries Dijkstra with dynamic fire proximity costs
+    // 4. Falls back to A* if Dijkstra fails
+    // 5. Falls back to K-Shortest Paths if A* fails
+    // 6. Saves route to database
+    // 7. Returns GeoJSON format for frontend display
+    return this.fireSafetyService.computeRoute(createRouteDto);
   }
 
   // Debug endpoint: returns raw pgr_dijkstra rows, referenced edges, and active hazards
@@ -546,5 +512,81 @@ export class FireSafetyController {
   @Delete(':id')
   remove(@Param('id', ParseIntPipe) id: number) {
     return this.fireSafetyService.remove(id);
+  }
+
+  // ============================================
+  // SAFEST POINT ENDPOINTS
+  // ============================================
+
+  /**
+   * POST /fireSafety/safest-point
+   * Finds the safest point when exits are blocked by fire
+   *
+   * This endpoint calculates the best location for a person to wait
+   * for rescue when all exits are blocked. The algorithm considers:
+   * - Distance from active fires
+   * - Window access (ventilation, signaling)
+   * - External access (rescue teams can reach)
+   * - Fire resistant structure
+   * - Communication access
+   * - Capacity for multiple people
+   *
+   * @param dto - Contains currentNodeId and optional floorId
+   * @returns Safe point details with route and safety score breakdown
+   */
+  @Post('safest-point')
+  async findSafestPoint(@Body() dto: FindSafestPointDto) {
+    return this.fireSafetyService.findSafestPoint(
+      dto.currentNodeId,
+      dto.floorId,
+    );
+  }
+
+  /**
+   * GET /fireSafety/safe-points
+   * Returns all configured safe points in the building
+   *
+   * Safe points are pre-designated locations where people can
+   * safely wait for rescue if exits are blocked.
+   */
+  @Get('safe-points')
+  async getAllSafePoints() {
+    return this.fireSafetyService.getAllSafePoints();
+  }
+
+  /**
+   * GET /fireSafety/safe-points/geojson
+   * Returns safe points as GeoJSON for map display
+   */
+  @Get('safe-points/geojson')
+  async getSafePointsAsGeoJSON() {
+    const query = `
+      SELECT json_build_object(
+        'type', 'FeatureCollection',
+        'features', COALESCE(json_agg(
+          json_build_object(
+            'type', 'Feature',
+            'geometry', ST_AsGeoJSON(ST_Transform(n.geometry, 4326))::json,
+            'properties', json_build_object(
+              'id', sp.id,
+              'nodeId', sp.node_id,
+              'priority', sp.priority,
+              'hasWindow', sp.has_window,
+              'hasExternalAccess', sp.has_external_access,
+              'isFireResistant', sp.is_fire_resistant,
+              'capacity', sp.capacity,
+              'notes', sp.notes,
+              'type', 'safe_point'
+            )
+          )
+        ), '[]'::json)
+      ) AS geojson
+      FROM safe_points sp
+      JOIN nodes n ON sp.node_id = n.id;
+    `;
+    const res = await this.dataSource.query(query);
+    return res && res[0]
+      ? res[0].geojson
+      : { type: 'FeatureCollection', features: [] };
   }
 }

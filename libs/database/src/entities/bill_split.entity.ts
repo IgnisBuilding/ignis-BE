@@ -2,24 +2,28 @@ import { Entity, PrimaryGeneratedColumn, Column } from 'typeorm';
 
 @Entity()
 export class bill_split {
-    @PrimaryGeneratedColumn()
-    id: number;
-    
-    @Column()
-    bill_id: number;
+  @PrimaryGeneratedColumn()
+  id: number;
 
-    @Column()
-    user_id: number;
+  @Column()
+  bill_id: number;
 
-    @Column({ type: 'date'})
-    split_amount: number;
+  @Column()
+  user_id: number;
 
-    @Column({ type: 'boolean', default: false })
-    paid: boolean;
+  @Column({ type: 'date' })
+  split_amount: number;
 
-    @Column({ type: 'timestamp', default: () => 'CURRENT_TIMESTAMP' })
-    created_at: Date;
+  @Column({ type: 'boolean', default: false })
+  paid: boolean;
 
-    @Column({ type: 'timestamp', default: () => 'CURRENT_TIMESTAMP', onUpdate: 'CURRENT_TIMESTAMP' })
-    updated_at: Date;
-}  
+  @Column({ type: 'timestamp', default: () => 'CURRENT_TIMESTAMP' })
+  created_at: Date;
+
+  @Column({
+    type: 'timestamp',
+    default: () => 'CURRENT_TIMESTAMP',
+    onUpdate: 'CURRENT_TIMESTAMP',
+  })
+  updated_at: Date;
+}
