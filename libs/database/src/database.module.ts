@@ -5,24 +5,24 @@ import { ConfigModule } from '@nestjs/config';
 import { Society } from './entities/society.entity';
 import { notification } from './entities/notification.entity';
 import { payment } from './entities/payment.entity';
-import {bill} from './entities/bill.entity';
-import {apartment} from './entities/apartment.entity';
-import {bill_split} from './entities/bill_split.entity';
+import { bill } from './entities/bill.entity';
+import { apartment } from './entities/apartment.entity';
+import { bill_split } from './entities/bill_split.entity';
 import { building } from './entities/building.entity';
 import { floor } from './entities/floor.entity';
 import { incident_log } from './entities/incident_log.entity';
 import { meter } from './entities/meter.entity';
-import {meter_reading} from './entities/meter_reading.entity';
-import {sensor} from './entities/sensor.entity';
-import {sensor_log} from './entities/sensor_log.entity';
-import {nodes} from './entities/nodes.entity';
+import { meter_reading } from './entities/meter_reading.entity';
+import { sensor } from './entities/sensor.entity';
+import { sensor_log } from './entities/sensor_log.entity';
+import { nodes } from './entities/nodes.entity';
 import { exits } from './entities/exits.entity';
 import { edges } from './entities/edges.entity';
 import { hazards } from './entities/hazards.entity';
 import { EvacuationRoute } from './entities/evacuation_route.entity';
 
 @Module({
-  imports :[
+  imports: [
     ConfigModule.forRoot({
       isGlobal: true,
     }),
@@ -33,11 +33,30 @@ import { EvacuationRoute } from './entities/evacuation_route.entity';
       username: process.env.DB_USER,
       password: process.env.DB_PASS,
       database: process.env.DB_NAME,
-      entities: [Society, notification, payment, bill, apartment, bill_split, building, floor, incident_log, meter, meter_reading, sensor, sensor_log, nodes, exits, edges, hazards, EvacuationRoute],
+      entities: [
+        Society,
+        notification,
+        payment,
+        bill,
+        apartment,
+        bill_split,
+        building,
+        floor,
+        incident_log,
+        meter,
+        meter_reading,
+        sensor,
+        sensor_log,
+        nodes,
+        exits,
+        edges,
+        hazards,
+        EvacuationRoute,
+      ],
       synchronize: false,
       logging: true,
-      migrations: [__dirname + '/migrations/*.ts']
-    })
-  ]
+      migrations: [__dirname + '/migrations/*.ts'],
+    }),
+  ],
 })
 export class DatabaseModule {}

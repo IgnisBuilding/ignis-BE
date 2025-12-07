@@ -3,7 +3,9 @@ import { SocietyManagementService } from './society-management.service';
 
 @Controller()
 export class SocietyManagementController {
-  constructor(private readonly societyManagementService: SocietyManagementService) {}
+  constructor(
+    private readonly societyManagementService: SocietyManagementService,
+  ) {}
 
   @Get()
   getHello(): string {
