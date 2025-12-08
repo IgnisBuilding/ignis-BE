@@ -57,6 +57,19 @@ export class NavigationGraphEnhancements1733590800000 implements MigrationInterf
       )
     `);
 
+    // Add unique constraint if it doesn't exist (handles case where table was partially created)
+    await queryRunner.query(`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM information_schema.table_constraints
+          WHERE constraint_name = 'UQ_safe_points_node' AND table_name = 'safe_points'
+        ) THEN
+          ALTER TABLE "safe_points" ADD CONSTRAINT "UQ_safe_points_node" UNIQUE ("node_id");
+        END IF;
+      END $$;
+    `);
+
     // Create index for faster lookups
     await queryRunner.query(`
       CREATE INDEX IF NOT EXISTS "IDX_safe_points_floor" ON "safe_points" ("floor_id")
@@ -303,7 +316,7 @@ export class NavigationGraphEnhancements1733590800000 implements MigrationInterf
       FROM nodes n
       WHERE n.type IN ('bathroom', 'bedroom', 'kitchen', 'living_room')
         AND n.floor_id IS NOT NULL
-      ON CONFLICT (node_id) DO NOTHING
+      ON CONFLICT ON CONSTRAINT "UQ_safe_points_node" DO NOTHING
     `);
 
     // ============================================================
