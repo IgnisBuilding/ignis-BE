@@ -2,6 +2,7 @@ import {
   Controller,
   Get,
   Post,
+  Put,
   Body,
   Param,
   Delete,
@@ -9,6 +10,7 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { FireSafetyService } from './fire_safety.service';
+import { IsolationDetectionService } from './isolation-detection.service';
 import { CreateRouteDto } from './dto/CreateRoute.dto';
 import { DataSource } from 'typeorm';
 import { PlaceFiresDto } from './dto/PlaceFires.dto';
@@ -18,6 +20,7 @@ import { FindSafestPointDto } from './dto/FindSafestPoint.dto';
 export class FireSafetyController {
   constructor(
     private readonly fireSafetyService: FireSafetyService,
+    private readonly isolationDetectionService: IsolationDetectionService,
     private readonly dataSource: DataSource,
   ) {}
 
@@ -291,22 +294,107 @@ export class FireSafetyController {
   }
 
   // Get room-to-node mapping for navigation
+  // Door markers are placed at room BOUNDARIES (where rooms touch) not at room centers
   @Get('room-nodes')
   async getRoomNodes() {
     try {
+      // Compute door positions from room boundary intersections
+      // Find where rooms share boundaries and place markers there
       const query = `
+        WITH room_boundaries AS (
+          -- Find all room pairs that share a boundary (door locations)
+          SELECT
+            r1.id as room_id,
+            r1.name as room_name,
+            r2.id as adjacent_room_id,
+            r2.name as adjacent_room_name,
+            f.level as floor_level,
+            -- The door position is the centroid of the shared boundary
+            ST_Centroid(ST_Intersection(r1.geometry, r2.geometry)) as door_geometry
+          FROM room r1
+          JOIN room r2 ON r1.id < r2.id
+            AND r1.floor_id = r2.floor_id
+            AND ST_Touches(r1.geometry, r2.geometry)
+          JOIN floor f ON r1.floor_id = f.id
+        ),
+        room_door_positions AS (
+          -- For each room, get all its door positions with type determination
+          SELECT DISTINCT ON (room_id)
+            room_id,
+            room_name,
+            floor_level,
+            ST_X(ST_Transform(door_geometry, 4326)) as longitude,
+            ST_Y(ST_Transform(door_geometry, 4326)) as latitude,
+            adjacent_room_name,
+            -- Determine door type based on room names and connections
+            CASE
+              WHEN LOWER(room_name) LIKE '%stair%' OR LOWER(adjacent_room_name) LIKE '%stair%'
+                   OR LOWER(room_name) LIKE '%basement%' OR LOWER(adjacent_room_name) LIKE '%basement%' THEN 'stairs'
+              WHEN LOWER(room_name) LIKE '%foyer%' OR LOWER(room_name) LIKE '%entry%'
+                   OR LOWER(room_name) LIKE '%porch%' OR LOWER(room_name) LIKE '%vestibule%' THEN 'entry'
+              WHEN LOWER(adjacent_room_name) LIKE '%foyer%' OR LOWER(adjacent_room_name) LIKE '%entry%'
+                   OR LOWER(adjacent_room_name) LIKE '%porch%' THEN 'entry'
+              WHEN LOWER(room_name) LIKE '%garage%' OR LOWER(adjacent_room_name) LIKE '%garage%' THEN 'exit'
+              WHEN LOWER(room_name) LIKE '%hall%' OR LOWER(adjacent_room_name) LIKE '%hall%' THEN 'doorway'
+              ELSE 'doorway'
+            END as node_type,
+            -- Priority for DISTINCT ON selection: prefer entry/exit connections
+            CASE
+              WHEN LOWER(adjacent_room_name) LIKE '%foyer%' OR LOWER(adjacent_room_name) LIKE '%entry%' THEN 1
+              WHEN LOWER(adjacent_room_name) LIKE '%hall%' THEN 2
+              WHEN LOWER(adjacent_room_name) LIKE '%stair%' OR LOWER(adjacent_room_name) LIKE '%basement%' THEN 3
+              ELSE 4
+            END as priority
+          FROM room_boundaries
+          UNION ALL
+          -- Also include the adjacent room's perspective
+          SELECT DISTINCT ON (adjacent_room_id)
+            adjacent_room_id as room_id,
+            adjacent_room_name as room_name,
+            floor_level,
+            ST_X(ST_Transform(door_geometry, 4326)) as longitude,
+            ST_Y(ST_Transform(door_geometry, 4326)) as latitude,
+            room_name as adjacent_room_name,
+            CASE
+              WHEN LOWER(adjacent_room_name) LIKE '%stair%' OR LOWER(room_name) LIKE '%stair%'
+                   OR LOWER(adjacent_room_name) LIKE '%basement%' OR LOWER(room_name) LIKE '%basement%' THEN 'stairs'
+              WHEN LOWER(adjacent_room_name) LIKE '%foyer%' OR LOWER(adjacent_room_name) LIKE '%entry%'
+                   OR LOWER(adjacent_room_name) LIKE '%porch%' THEN 'entry'
+              WHEN LOWER(room_name) LIKE '%foyer%' OR LOWER(room_name) LIKE '%entry%'
+                   OR LOWER(room_name) LIKE '%porch%' THEN 'entry'
+              WHEN LOWER(adjacent_room_name) LIKE '%garage%' OR LOWER(room_name) LIKE '%garage%' THEN 'exit'
+              WHEN LOWER(adjacent_room_name) LIKE '%hall%' OR LOWER(room_name) LIKE '%hall%' THEN 'doorway'
+              ELSE 'doorway'
+            END as node_type,
+            CASE
+              WHEN LOWER(room_name) LIKE '%foyer%' OR LOWER(room_name) LIKE '%entry%' THEN 1
+              WHEN LOWER(room_name) LIKE '%hall%' THEN 2
+              WHEN LOWER(room_name) LIKE '%stair%' OR LOWER(room_name) LIKE '%basement%' THEN 3
+              ELSE 4
+            END as priority
+          FROM room_boundaries
+        ),
+        final_positions AS (
+          SELECT DISTINCT ON (room_id)
+            room_id,
+            room_name,
+            floor_level,
+            longitude,
+            latitude,
+            node_type
+          FROM room_door_positions
+          ORDER BY room_id, priority ASC
+        )
         SELECT
-          r.id as room_id,
-          r.name as room_name,
-          n.id as node_id,
-          n.type as node_type,
-          f.level as floor_level,
-          ST_X(ST_Transform(n.geometry, 4326)) as longitude,
-          ST_Y(ST_Transform(n.geometry, 4326)) as latitude
-        FROM room r
-        JOIN nodes n ON ST_Equals(n.geometry, ST_Centroid(r.geometry))
-        JOIN floor f ON r.floor_id = f.id
-        ORDER BY r.id;
+          room_id,
+          room_name,
+          room_id as node_id,  -- Use room_id as pseudo node_id
+          node_type,
+          floor_level,
+          longitude,
+          latitude
+        FROM final_positions
+        ORDER BY floor_level, room_id;
       `;
       const result = await this.dataSource.query(query);
       return result;
@@ -588,5 +676,319 @@ export class FireSafetyController {
     return res && res[0]
       ? res[0].geojson
       : { type: 'FeatureCollection', features: [] };
+  }
+
+  // ============================================
+  // RESCUE MANAGEMENT ENDPOINTS
+  // ============================================
+
+  /**
+   * Get all trapped occupants ordered by rescue priority
+   * Used by rescue dashboard to see who needs help first
+   */
+  @Get('rescue/trapped-occupants')
+  async getTrappedOccupants() {
+    const occupants =
+      await this.isolationDetectionService.getTrappedOccupantsByPriority();
+
+    return {
+      success: true,
+      count: occupants.length,
+      data: occupants,
+      timestamp: new Date().toISOString(),
+    };
+  }
+
+  /**
+   * Get a specific trapped occupant's details
+   */
+  @Get('rescue/trapped-occupants/:id')
+  async getTrappedOccupant(@Param('id', ParseIntPipe) id: number) {
+    const result = await this.dataSource.query(
+      `SELECT
+        to_.*,
+        rt.team_name as assigned_team_name,
+        rt.team_code as assigned_team_code,
+        rt.status as team_status
+      FROM trapped_occupants to_
+      LEFT JOIN rescue_teams rt ON to_.assigned_team_id = rt.id
+      WHERE to_.id = $1`,
+      [id],
+    );
+
+    if (!result || result.length === 0) {
+      throw new BadRequestException(`Trapped occupant with ID ${id} not found`);
+    }
+
+    return {
+      success: true,
+      data: result[0],
+    };
+  }
+
+  /**
+   * Update trapped occupant information (e.g., add more details about occupants)
+   */
+  @Put('rescue/trapped-occupants/:id')
+  async updateTrappedOccupant(
+    @Param('id', ParseIntPipe) id: number,
+    @Body()
+    updateDto: {
+      occupantCount?: number;
+      hasElderly?: boolean;
+      hasDisabled?: boolean;
+      hasChildren?: boolean;
+      contactNumber?: string;
+      status?: string;
+    },
+  ) {
+    const updates: string[] = [];
+    const values: any[] = [];
+    let paramIndex = 1;
+
+    if (updateDto.occupantCount !== undefined) {
+      updates.push(`occupant_count = $${paramIndex++}`);
+      values.push(updateDto.occupantCount);
+    }
+    if (updateDto.hasElderly !== undefined) {
+      updates.push(`has_elderly = $${paramIndex++}`);
+      values.push(updateDto.hasElderly);
+    }
+    if (updateDto.hasDisabled !== undefined) {
+      updates.push(`has_disabled = $${paramIndex++}`);
+      values.push(updateDto.hasDisabled);
+    }
+    if (updateDto.hasChildren !== undefined) {
+      updates.push(`has_children = $${paramIndex++}`);
+      values.push(updateDto.hasChildren);
+    }
+    if (updateDto.contactNumber !== undefined) {
+      updates.push(`contact_number = $${paramIndex++}`);
+      values.push(updateDto.contactNumber);
+    }
+    if (updateDto.status !== undefined) {
+      updates.push(`status = $${paramIndex++}`);
+      values.push(updateDto.status);
+    }
+
+    if (updates.length === 0) {
+      throw new BadRequestException('No fields to update');
+    }
+
+    updates.push(`updated_at = NOW()`);
+    values.push(id);
+
+    await this.dataSource.query(
+      `UPDATE trapped_occupants SET ${updates.join(', ')} WHERE id = $${paramIndex}`,
+      values,
+    );
+
+    return {
+      success: true,
+      message: 'Trapped occupant updated successfully',
+    };
+  }
+
+  /**
+   * Get all rescue teams with their current status and assignments
+   */
+  @Get('rescue/teams')
+  async getRescueTeams() {
+    const teams = await this.isolationDetectionService.getAllRescueTeams();
+
+    return {
+      success: true,
+      count: teams.length,
+      data: teams,
+      timestamp: new Date().toISOString(),
+    };
+  }
+
+  /**
+   * Get available (unassigned) rescue teams
+   */
+  @Get('rescue/teams/available')
+  async getAvailableRescueTeams() {
+    const teams = await this.isolationDetectionService.getAvailableRescueTeams();
+
+    return {
+      success: true,
+      count: teams.length,
+      data: teams,
+    };
+  }
+
+  /**
+   * Assign a rescue team to a trapped occupant
+   */
+  @Post('rescue/assign')
+  async assignRescueTeam(
+    @Body()
+    assignDto: {
+      trappedOccupantId: number;
+      rescueTeamId: number;
+      estimatedRescueMinutes?: number;
+    },
+  ) {
+    if (!assignDto.trappedOccupantId || !assignDto.rescueTeamId) {
+      throw new BadRequestException(
+        'trappedOccupantId and rescueTeamId are required',
+      );
+    }
+
+    await this.isolationDetectionService.assignRescueTeam(
+      assignDto.trappedOccupantId,
+      assignDto.rescueTeamId,
+      assignDto.estimatedRescueMinutes,
+    );
+
+    // Emit WebSocket event for real-time dashboard update
+    try {
+      const globalAny: any = global as any;
+      const io =
+        globalAny.__io ||
+        (globalAny.__appInstance && globalAny.__appInstance.get
+          ? globalAny.__appInstance.get('io')
+          : null);
+
+      if (io && typeof io.emit === 'function') {
+        io.emit('rescue.assigned', {
+          trappedOccupantId: assignDto.trappedOccupantId,
+          rescueTeamId: assignDto.rescueTeamId,
+          estimatedRescueMinutes: assignDto.estimatedRescueMinutes,
+          timestamp: new Date().toISOString(),
+        });
+      }
+    } catch (e) {
+      console.warn('Could not emit rescue.assigned event', e);
+    }
+
+    return {
+      success: true,
+      message: 'Rescue team assigned successfully',
+    };
+  }
+
+  /**
+   * Mark a trapped occupant as rescued
+   */
+  @Post('rescue/mark-rescued/:id')
+  async markAsRescued(@Param('id', ParseIntPipe) id: number) {
+    await this.isolationDetectionService.markAsRescued(id);
+
+    // Emit WebSocket event
+    try {
+      const globalAny: any = global as any;
+      const io =
+        globalAny.__io ||
+        (globalAny.__appInstance && globalAny.__appInstance.get
+          ? globalAny.__appInstance.get('io')
+          : null);
+
+      if (io && typeof io.emit === 'function') {
+        io.emit('occupant.rescued', {
+          trappedOccupantId: id,
+          timestamp: new Date().toISOString(),
+        });
+      }
+    } catch (e) {
+      console.warn('Could not emit occupant.rescued event', e);
+    }
+
+    return {
+      success: true,
+      message: 'Occupant marked as rescued',
+    };
+  }
+
+  /**
+   * Update rescue team status
+   */
+  @Put('rescue/teams/:id/status')
+  async updateTeamStatus(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() statusDto: { status: string; currentLocation?: string },
+  ) {
+    if (!statusDto.status) {
+      throw new BadRequestException('status is required');
+    }
+
+    const validStatuses = [
+      'AVAILABLE',
+      'ASSIGNED',
+      'EN_ROUTE',
+      'ON_SCENE',
+      'RETURNING',
+      'OFF_DUTY',
+    ];
+
+    if (!validStatuses.includes(statusDto.status)) {
+      throw new BadRequestException(
+        `Invalid status. Must be one of: ${validStatuses.join(', ')}`,
+      );
+    }
+
+    await this.dataSource.query(
+      `UPDATE rescue_teams SET
+        status = $1,
+        current_location = COALESCE($2, current_location),
+        last_status_update = NOW()
+      WHERE id = $3`,
+      [statusDto.status, statusDto.currentLocation || null, id],
+    );
+
+    return {
+      success: true,
+      message: 'Team status updated',
+    };
+  }
+
+  /**
+   * Get rescue statistics/dashboard summary
+   */
+  @Get('rescue/stats')
+  async getRescueStats() {
+    const stats = await this.dataSource.query(`
+      SELECT
+        (SELECT COUNT(*) FROM trapped_occupants WHERE status NOT IN ('RESCUED', 'EVACUATED')) as active_trapped,
+        (SELECT COUNT(*) FROM trapped_occupants WHERE priority_level = 'CRITICAL' AND status NOT IN ('RESCUED', 'EVACUATED')) as critical_count,
+        (SELECT COUNT(*) FROM trapped_occupants WHERE priority_level = 'HIGH' AND status NOT IN ('RESCUED', 'EVACUATED')) as high_count,
+        (SELECT COUNT(*) FROM trapped_occupants WHERE priority_level = 'MEDIUM' AND status NOT IN ('RESCUED', 'EVACUATED')) as medium_count,
+        (SELECT COUNT(*) FROM trapped_occupants WHERE priority_level = 'LOW' AND status NOT IN ('RESCUED', 'EVACUATED')) as low_count,
+        (SELECT COUNT(*) FROM trapped_occupants WHERE status = 'RESCUED') as rescued_count,
+        (SELECT COUNT(*) FROM rescue_teams WHERE status = 'AVAILABLE') as available_teams,
+        (SELECT COUNT(*) FROM rescue_teams WHERE status IN ('ASSIGNED', 'EN_ROUTE', 'ON_SCENE')) as active_teams,
+        (SELECT SUM(occupant_count) FROM trapped_occupants WHERE status NOT IN ('RESCUED', 'EVACUATED')) as total_trapped_people
+    `);
+
+    return {
+      success: true,
+      data: stats[0],
+      timestamp: new Date().toISOString(),
+    };
+  }
+
+  /**
+   * Get isolation event history for audit trail
+   */
+  @Get('rescue/events')
+  async getIsolationEvents() {
+    const events = await this.dataSource.query(`
+      SELECT
+        ie.*,
+        to_.room_name as trapped_location,
+        rt.team_name as rescue_team_name
+      FROM isolation_events ie
+      LEFT JOIN trapped_occupants to_ ON ie.trapped_occupant_id = to_.id
+      LEFT JOIN rescue_teams rt ON ie.rescue_team_id = rt.id
+      ORDER BY ie.event_at DESC
+      LIMIT 100
+    `);
+
+    return {
+      success: true,
+      count: events.length,
+      data: events,
+    };
   }
 }

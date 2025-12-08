@@ -260,11 +260,14 @@ import {
   Injectable,
   NotFoundException,
   BadRequestException,
+  Logger,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource } from 'typeorm';
 import { EvacuationRoute } from '@app/entities';
 import { CreateRouteDto } from './dto/CreateRoute.dto';
+import { IsolationDetectionService } from './isolation-detection.service';
+import { IsolatedLocationException } from './exceptions/isolated-location.exception';
 
 /**
  * Enhanced Fire Safety Service with Multiple Routing Algorithms
@@ -280,10 +283,13 @@ import { CreateRouteDto } from './dto/CreateRoute.dto';
  */
 @Injectable()
 export class FireSafetyService {
+  private readonly logger = new Logger(FireSafetyService.name);
+
   constructor(
     @InjectRepository(EvacuationRoute)
     private routeRepo: Repository<EvacuationRoute>,
     private dataSource: DataSource,
+    private isolationDetectionService: IsolationDetectionService,
   ) {}
 
   // ============================================
@@ -441,20 +447,81 @@ export class FireSafetyService {
     await this.validateNodes(startNodeId, endNodeId);
 
     // Check if start or end nodes are fire zones
+    // TC_01 FIX: Allow routing FROM fire zone (person needs to escape)
+    // TC_02 FIX: If end node is in fire, redirect to safe point instead of error
     const fireCheck = await this.checkNodesForFire([startNodeId, endNodeId]);
+
+    let effectiveEndNodeId = endNodeId;
+    let endNodeInFire = false;
+    let startInFire = false;  // Track if person is escaping from fire
+
     if (fireCheck.hasFireNodes) {
-      throw new BadRequestException(
-        `Cannot route through fire zones: ${fireCheck.fireNodeIds.join(', ')}`,
-      );
+      startInFire = fireCheck.fireNodeIds.includes(startNodeId);
+      const endInFire = fireCheck.fireNodeIds.includes(endNodeId);
+
+      // If ONLY start is in fire, allow it - person needs to escape
+      // Log this for awareness but continue routing
+      if (startInFire && !endInFire) {
+        this.logger.warn(
+          `Start node ${startNodeId} is in fire zone - computing escape route to safety`,
+        );
+        // Continue with normal routing - person can escape from fire
+        // The routing algorithms will be told to allow edges departing from startNodeId
+      }
+      // If end node is in fire (regardless of start), find alternate safe destination
+      else if (endInFire) {
+        this.logger.warn(
+          `End node ${endNodeId} is in fire zone - redirecting to nearest safe point`,
+        );
+        endNodeInFire = true;
+
+        // Try to find a safe point or alternate exit
+        try {
+          const safePointResult = await this.findRouteToNearestSafePoint(startNodeId);
+          if (safePointResult) {
+            this.logger.log(
+              `Redirected from fire zone ${endNodeId} to safe point: ${safePointResult.safePointName}`,
+            );
+            return {
+              ...safePointResult.route,
+              safePointFallback: true,
+              redirectedFromFireZone: true,
+              originalEndNode: endNodeId,
+              safePoint: safePointResult.safePoint,
+              message: `Destination (node ${endNodeId}) is in fire zone. Redirected to safe point: ${safePointResult.safePointName}. ${safePointResult.safePoint.notes || ''}`,
+            };
+          }
+        } catch (e) {
+          this.logger.warn(`Could not find safe point alternative: ${e.message}`);
+        }
+
+        // If no safe point found, try to find nearest exit that's not in fire
+        const alternateExit = await this.findNearestSafeExit(startNodeId);
+        if (alternateExit) {
+          effectiveEndNodeId = alternateExit.nodeId;
+          this.logger.log(
+            `Using alternate exit node ${effectiveEndNodeId} instead of fire zone ${endNodeId}`,
+          );
+        } else {
+          // No alternatives - this will likely trigger isolation detection later
+          this.logger.warn(
+            `No safe alternatives found for fire zone destination ${endNodeId}`,
+          );
+        }
+      }
     }
+
+    // Determine escape node - if start is in fire, we allow edges departing from it
+    const escapeFromFireNode = startInFire ? startNodeId : undefined;
 
     // ============================================
     // ROUTING ATTEMPT 1: Dijkstra (Primary)
     // ============================================
-    console.log('Attempting route computation with Dijkstra...');
+    console.log(`Attempting route computation with Dijkstra (${startNodeId} -> ${effectiveEndNodeId})${startInFire ? ' [ESCAPE MODE]' : ''}...`);
     let routeGeometry = await this.computeDijkstraWithHazardCosts(
       startNodeId,
-      endNodeId,
+      effectiveEndNodeId,
+      escapeFromFireNode,
     );
 
     // ============================================
@@ -462,7 +529,7 @@ export class FireSafetyService {
     // ============================================
     if (!routeGeometry) {
       console.log('Dijkstra failed, attempting A* algorithm...');
-      routeGeometry = await this.computeAStarRoute(startNodeId, endNodeId);
+      routeGeometry = await this.computeAStarRoute(startNodeId, effectiveEndNodeId, escapeFromFireNode);
     }
 
     // ============================================
@@ -470,7 +537,7 @@ export class FireSafetyService {
     // ============================================
     if (!routeGeometry) {
       console.log('A* failed, attempting K-Shortest Paths...');
-      routeGeometry = await this.computeKShortestPaths(startNodeId, endNodeId);
+      routeGeometry = await this.computeKShortestPaths(startNodeId, effectiveEndNodeId, escapeFromFireNode);
     }
 
     // ============================================
@@ -497,12 +564,41 @@ export class FireSafetyService {
     }
 
     // If all algorithms including safe point fallback fail
+    // This means the occupant is ISOLATED - handle with rescue priority system
     if (!routeGeometry) {
-      throw new NotFoundException(
-        `No safe evacuation route found between nodes ${startNodeId} and ${endNodeId}. ` +
-          `All routing algorithms exhausted including safe point fallback. ` +
-          `Please stay in place, seal doors, and call emergency services.`,
+      this.logger.warn(
+        `All routing algorithms failed for node ${startNodeId}. Initiating isolation detection.`,
       );
+
+      // Get the list of blocked nodes (fire zones)
+      const blockedNodes = await this.getBlockedNodeIds();
+
+      // Analyze the isolation situation
+      const isolationInfo = await this.isolationDetectionService.analyzeIsolation(
+        startNodeId,
+        blockedNodes,
+      );
+
+      this.logger.log(
+        `Isolation analysis complete: ${isolationInfo.isolationReason}, Priority: ${isolationInfo.priorityLevel}`,
+      );
+
+      // Register the trapped occupant for rescue prioritization
+      let trappedOccupantId: number | null = null;
+      try {
+        trappedOccupantId = await this.isolationDetectionService.registerTrappedOccupant(
+          isolationInfo,
+        );
+        this.logger.log(`Registered trapped occupant with ID: ${trappedOccupantId}`);
+
+        // Emit WebSocket event to notify rescue dashboard
+        this.emitIsolationEvent(isolationInfo, trappedOccupantId);
+      } catch (regError) {
+        this.logger.error('Failed to register trapped occupant:', regError);
+      }
+
+      // Throw the specialized exception with all isolation details
+      throw new IsolatedLocationException(isolationInfo, trappedOccupantId);
     }
 
     // Save route to database
@@ -533,17 +629,39 @@ export class FireSafetyService {
    *
    * @param startNodeId - Start node ID
    * @param endNodeId - End node ID
+   * @param escapeFromFireNode - If set, allows edges departing from this node even if it's in fire zone
    * @returns WKT geometry string or null if no path found
    */
   private async computeDijkstraWithHazardCosts(
     startNodeId: number,
     endNodeId: number,
+    escapeFromFireNode?: number,
   ): Promise<string | null> {
     try {
       // Get the blocked nodes SQL that includes all nodes inside fire rooms
       const blockedNodesSQL = this.getBlockedNodesSQL();
       // Get the edge blocking condition (edges that cross through fire rooms)
-      const blockedEdgesCondition = this.getBlockedEdgesConditionSQL();
+      // TC_01 FIX: When escaping from fire, allow edges directly connected to the escape node
+      // even if they cross through fire room geometry (person needs to leave the fire room)
+      const blockedEdgesCondition = escapeFromFireNode
+        ? `(NOT EXISTS (
+            SELECT 1
+            FROM (${this.getFireRoomGeometriesSQL()}) fire_rooms
+            WHERE ST_Intersects(e.geometry, fire_rooms.room_geom)
+          ) OR e.source_id = ${escapeFromFireNode} OR e.target_id = ${escapeFromFireNode})`
+        : this.getBlockedEdgesConditionSQL();
+
+      // If escaping from fire, we need to allow edges departing from the fire node
+      // but still block all other fire nodes and edges going INTO fire
+      // TC_01 FIX: Also allow edges to immediate neighbors of escape node (first hop out of fire)
+      const escapeNodeCondition = escapeFromFireNode
+        ? `OR e.source_id = ${escapeFromFireNode}`
+        : '';
+      // Allow target nodes that are directly connected to the escape node
+      // This enables the first hop out of the fire room
+      const escapeTargetCondition = escapeFromFireNode
+        ? `OR e.target_id IN (SELECT target_id FROM edges WHERE source_id = ${escapeFromFireNode} UNION SELECT source_id FROM edges WHERE target_id = ${escapeFromFireNode})`
+        : '';
 
       // Build dynamic cost calculation query
       // Cost increases exponentially as we get closer to fire nodes
@@ -575,8 +693,10 @@ export class FireSafetyService {
           WHERE h.status = 'ACTIVE'
         ) fire_distances ON true
         -- Exclude edges connected to ANY node inside fire room geometry
-        WHERE e.source_id NOT IN (${blockedNodesSQL})
-        AND e.target_id NOT IN (${blockedNodesSQL})
+        -- EXCEPT: Allow edges DEPARTING from escape node (person fleeing fire)
+        -- AND allow first hop to immediate neighbors of escape node
+        WHERE (e.source_id NOT IN (${blockedNodesSQL}) ${escapeNodeCondition})
+        AND (e.target_id NOT IN (${blockedNodesSQL}) ${escapeTargetCondition})
         -- Exclude edges that cross through fire room geometry
         AND ${blockedEdgesCondition}
 
@@ -605,8 +725,11 @@ export class FireSafetyService {
           JOIN nodes n_target ON e.target_id = n_target.id
           WHERE h.status = 'ACTIVE'
         ) fire_distances ON true
-        WHERE e.source_id NOT IN (${blockedNodesSQL})
-        AND e.target_id NOT IN (${blockedNodesSQL})
+        -- For reverse edges, the "source" in pgRouting is actually target_id
+        -- Allow edges where target_id (which becomes source in reverse) is the escape node
+        -- Also allow immediate neighbors as sources (first hop out)
+        WHERE (e.target_id NOT IN (${blockedNodesSQL}) ${escapeNodeCondition ? `OR e.target_id = ${escapeFromFireNode}` : ''})
+        AND (e.source_id NOT IN (${blockedNodesSQL}) ${escapeTargetCondition})
         -- Exclude edges that cross through fire room geometry
         AND ${blockedEdgesCondition}
       `;
@@ -667,16 +790,18 @@ export class FireSafetyService {
    *
    * @param startNodeId - Start node ID
    * @param endNodeId - End node ID
+   * @param escapeFromFireNode - If set, allows edges departing from this node even if it's in fire zone
    * @returns WKT geometry string or null if no path found
    */
   private async computeAStarRoute(
     startNodeId: number,
     endNodeId: number,
+    escapeFromFireNode?: number,
   ): Promise<string | null> {
     try {
       // Get goal node coordinates for heuristic calculation
       const goalNodeQuery = `
-        SELECT 
+        SELECT
           ST_X(ST_Transform(geometry, 4326)) AS lon,
           ST_Y(ST_Transform(geometry, 4326)) AS lat
         FROM nodes WHERE id = $1
@@ -695,7 +820,24 @@ export class FireSafetyService {
       // Get the blocked nodes SQL that includes all nodes inside fire rooms
       const blockedNodesSQL = this.getBlockedNodesSQL();
       // Get the edge blocking condition (edges that cross through fire rooms)
-      const blockedEdgesCondition = this.getBlockedEdgesConditionSQL();
+      // TC_01 FIX: When escaping from fire, allow edges directly connected to the escape node
+      const blockedEdgesCondition = escapeFromFireNode
+        ? `(NOT EXISTS (
+            SELECT 1
+            FROM (${this.getFireRoomGeometriesSQL()}) fire_rooms
+            WHERE ST_Intersects(e.geometry, fire_rooms.room_geom)
+          ) OR e.source_id = ${escapeFromFireNode} OR e.target_id = ${escapeFromFireNode})`
+        : this.getBlockedEdgesConditionSQL();
+
+      // If escaping from fire, allow edges departing from the fire node
+      // TC_01 FIX: Also allow edges to immediate neighbors of escape node (first hop out of fire)
+      const escapeNodeCondition = escapeFromFireNode
+        ? `OR e.source_id = ${escapeFromFireNode}`
+        : '';
+      // Allow target nodes that are directly connected to the escape node
+      const escapeTargetCondition = escapeFromFireNode
+        ? `OR e.target_id IN (SELECT target_id FROM edges WHERE source_id = ${escapeFromFireNode} UNION SELECT source_id FROM edges WHERE target_id = ${escapeFromFireNode})`
+        : '';
 
       // Edge selection with A* heuristic cost
       const edgeSelectionAStar = `
@@ -710,8 +852,8 @@ export class FireSafetyService {
           ) AS cost
         FROM edges e
         JOIN nodes n_source ON e.source_id = n_source.id
-        WHERE e.source_id NOT IN (${blockedNodesSQL})
-        AND e.target_id NOT IN (${blockedNodesSQL})
+        WHERE (e.source_id NOT IN (${blockedNodesSQL}) ${escapeNodeCondition})
+        AND (e.target_id NOT IN (${blockedNodesSQL}) ${escapeTargetCondition})
         AND ${blockedEdgesCondition}
 
         UNION ALL
@@ -726,8 +868,8 @@ export class FireSafetyService {
           ) AS cost
         FROM edges e
         JOIN nodes n_target ON e.target_id = n_target.id
-        WHERE e.source_id NOT IN (${blockedNodesSQL})
-        AND e.target_id NOT IN (${blockedNodesSQL})
+        WHERE (e.target_id NOT IN (${blockedNodesSQL}) ${escapeFromFireNode ? `OR e.target_id = ${escapeFromFireNode}` : ''})
+        AND (e.source_id NOT IN (${blockedNodesSQL}) ${escapeTargetCondition})
         AND ${blockedEdgesCondition}
       `;
 
@@ -787,20 +929,44 @@ export class FireSafetyService {
    *
    * @param startNodeId - Start node ID
    * @param endNodeId - End node ID
+   * @param escapeFromFireNode - If set, allow edges departing from this fire node (escape mode)
    * @returns WKT geometry string of best path or null
    */
   private async computeKShortestPaths(
     startNodeId: number,
     endNodeId: number,
+    escapeFromFireNode?: number,
   ): Promise<string | null> {
     try {
       // Get the blocked nodes SQL that includes all nodes inside fire rooms
       const blockedNodesSQL = this.getBlockedNodesSQL();
       // Get the edge blocking condition (edges that cross through fire rooms)
-      const blockedEdgesCondition = this.getBlockedEdgesConditionSQL();
+      // TC_01 FIX: When escaping from fire, allow edges directly connected to the escape node
+      const blockedEdgesCondition = escapeFromFireNode
+        ? `(NOT EXISTS (
+            SELECT 1
+            FROM (${this.getFireRoomGeometriesSQL()}) fire_rooms
+            WHERE ST_Intersects(e.geometry, fire_rooms.room_geom)
+          ) OR e.source_id = ${escapeFromFireNode} OR e.target_id = ${escapeFromFireNode})`
+        : this.getBlockedEdgesConditionSQL();
+
+      // TC_01 FIX: If escaping from fire, allow edges departing from the fire node
+      // Also allow edges to immediate neighbors of escape node (first hop out of fire)
+      const escapeNodeCondition = escapeFromFireNode
+        ? `OR e.source_id = ${escapeFromFireNode}`
+        : '';
+      const escapeNodeConditionReverse = escapeFromFireNode
+        ? `OR e.target_id = ${escapeFromFireNode}`
+        : '';
+      // Allow target nodes that are directly connected to the escape node
+      const escapeTargetCondition = escapeFromFireNode
+        ? `OR e.target_id IN (SELECT target_id FROM edges WHERE source_id = ${escapeFromFireNode} UNION SELECT source_id FROM edges WHERE target_id = ${escapeFromFireNode})`
+        : '';
 
       // Standard edge selection excluding all nodes inside fire room geometry
       // and edges that cross through fire room geometry
+      // Exception: Allow edges DEPARTING from escape node (person fleeing fire)
+      // AND allow first hop to immediate neighbors of escape node
       const edgeSelection = `
         SELECT
           (e.id * 2) AS id,
@@ -808,8 +974,8 @@ export class FireSafetyService {
           e.target_id AS target,
           e.cost
         FROM edges e
-        WHERE e.source_id NOT IN (${blockedNodesSQL})
-        AND e.target_id NOT IN (${blockedNodesSQL})
+        WHERE (e.source_id NOT IN (${blockedNodesSQL}) ${escapeNodeCondition})
+        AND (e.target_id NOT IN (${blockedNodesSQL}) ${escapeTargetCondition})
         AND ${blockedEdgesCondition}
 
         UNION ALL
@@ -820,8 +986,8 @@ export class FireSafetyService {
           e.source_id AS target,
           e.cost
         FROM edges e
-        WHERE e.source_id NOT IN (${blockedNodesSQL})
-        AND e.target_id NOT IN (${blockedNodesSQL})
+        WHERE (e.target_id NOT IN (${blockedNodesSQL}) ${escapeNodeConditionReverse})
+        AND (e.source_id NOT IN (${blockedNodesSQL}) ${escapeTargetCondition})
         AND ${blockedEdgesCondition}
       `;
 
@@ -1004,6 +1170,21 @@ export class FireSafetyService {
 
     const baseGeoJSON = result[0].geojson;
 
+    // NOTE: Doorway enhancement disabled - causes messy route visualization
+    // The route is now displayed as the direct path computed by pgRouting
+    // which follows corridor/hallway nodes naturally without forcing
+    // through room entrance/exit doorways
+    //
+    // Previously:
+    // try {
+    //   const enhancedGeoJSON = await this.enhanceRouteWithDoorways(baseGeoJSON);
+    //   if (enhancedGeoJSON) {
+    //     Object.assign(baseGeoJSON, enhancedGeoJSON);
+    //   }
+    // } catch (e) {
+    //   console.warn('Could not enhance route with doorways:', e.message);
+    // }
+
     // Get floor-segmented route data for multi-floor visualization
     try {
       const floorSegments = await this.getRouteFloorSegments(routeId);
@@ -1016,6 +1197,188 @@ export class FireSafetyService {
     }
 
     return baseGeoJSON;
+  }
+
+  /**
+   * Enhances route geometry by snapping path segments to pass through doorway positions
+   * instead of cutting directly through room interiors.
+   *
+   * This uses PostGIS to identify where route segments cross room boundaries
+   * and inserts doorway points at those intersections.
+   *
+   * @param geoJSON - Original route GeoJSON
+   * @returns Enhanced GeoJSON with doorway-snapped geometry
+   */
+  private async enhanceRouteWithDoorways(geoJSON: any): Promise<any> {
+    if (!geoJSON?.features?.[0]?.geometry?.coordinates) {
+      return null;
+    }
+
+    const routeCoords = geoJSON.features[0].geometry.coordinates;
+    if (routeCoords.length < 2) return null;
+
+    try {
+      // Build route LineString WKT for PostGIS query
+      const coordsWkt = routeCoords.map((c: number[]) => `${c[0]} ${c[1]}`).join(', ');
+      const routeLineWkt = `LINESTRING(${coordsWkt})`;
+
+      // Query to find doorway points where route crosses room boundaries
+      // Room geometry is in SRID 3857 (Web Mercator), so transform route to 3857 for comparison
+      const doorwayIntersectionsQuery = `
+        WITH route_line AS (
+          SELECT ST_Transform(ST_SetSRID(ST_GeomFromText($1), 4326), 3857) as geom
+        ),
+        room_boundary_lines AS (
+          -- Get the shared boundaries between adjacent rooms (already in 3857)
+          SELECT DISTINCT
+            ST_Centroid(ST_Intersection(r1.geometry, r2.geometry)) as door_point
+          FROM room r1
+          JOIN room r2 ON r1.id < r2.id
+            AND r1.floor_id = r2.floor_id
+            AND ST_Touches(r1.geometry, r2.geometry)
+        ),
+        route_boundary_crossings AS (
+          -- Find where route line passes near room boundaries
+          SELECT DISTINCT ON (
+            round(ST_X(ST_Transform(rbl.door_point, 4326))::numeric, 6),
+            round(ST_Y(ST_Transform(rbl.door_point, 4326))::numeric, 6)
+          )
+            ST_X(ST_Transform(rbl.door_point, 4326)) as lon,
+            ST_Y(ST_Transform(rbl.door_point, 4326)) as lat,
+            -- Distance along route for ordering (0 to 1)
+            ST_LineLocatePoint(
+              rl.geom,
+              ST_ClosestPoint(rl.geom, rbl.door_point)
+            ) as route_position
+          FROM route_line rl, room_boundary_lines rbl
+          WHERE ST_DWithin(rl.geom, rbl.door_point, 8) -- Within 8 meters of route (in 3857 units)
+          ORDER BY
+            round(ST_X(ST_Transform(rbl.door_point, 4326))::numeric, 6),
+            round(ST_Y(ST_Transform(rbl.door_point, 4326))::numeric, 6),
+            route_position
+        )
+        SELECT lon, lat, route_position
+        FROM route_boundary_crossings
+        WHERE lon IS NOT NULL AND lat IS NOT NULL
+        ORDER BY route_position
+      `;
+
+      const doorwayIntersections = await this.dataSource.query(
+        doorwayIntersectionsQuery,
+        [routeLineWkt]
+      );
+
+      if (!doorwayIntersections || doorwayIntersections.length === 0) {
+        return null;
+      }
+
+      // Build enhanced coordinates by inserting doorway points along the route
+      const enhancedCoords: number[][] = [];
+      let doorwayIdx = 0;
+
+      for (let i = 0; i < routeCoords.length; i++) {
+        const currentCoord = routeCoords[i];
+        const currentRoutePos = i / (routeCoords.length - 1);
+
+        // Insert any doorways that come before this position
+        while (
+          doorwayIdx < doorwayIntersections.length &&
+          parseFloat(doorwayIntersections[doorwayIdx].route_position) < currentRoutePos
+        ) {
+          const dw = doorwayIntersections[doorwayIdx];
+          const dwCoord = [parseFloat(dw.lon), parseFloat(dw.lat)];
+
+          // Check if this doorway is not too close to the last added point
+          const lastCoord = enhancedCoords.length > 0
+            ? enhancedCoords[enhancedCoords.length - 1]
+            : null;
+
+          if (!lastCoord || this.coordDistance(dwCoord, lastCoord) > 0.00003) { // ~3m min spacing
+            enhancedCoords.push(dwCoord);
+          }
+          doorwayIdx++;
+        }
+
+        // Add the current route point if not too close to last
+        const lastCoord = enhancedCoords.length > 0
+          ? enhancedCoords[enhancedCoords.length - 1]
+          : null;
+
+        if (!lastCoord || this.coordDistance(currentCoord, lastCoord) > 0.00002) { // ~2m min spacing
+          enhancedCoords.push(currentCoord);
+        }
+      }
+
+      // Add any remaining doorways at the end
+      while (doorwayIdx < doorwayIntersections.length) {
+        const dw = doorwayIntersections[doorwayIdx];
+        const dwCoord = [parseFloat(dw.lon), parseFloat(dw.lat)];
+        const lastCoord = enhancedCoords[enhancedCoords.length - 1];
+
+        if (this.coordDistance(dwCoord, lastCoord) > 0.00003) {
+          enhancedCoords.push(dwCoord);
+        }
+        doorwayIdx++;
+      }
+
+      // Update the geometry with enhanced coordinates
+      if (enhancedCoords.length > routeCoords.length) {
+        geoJSON.features[0].geometry.coordinates = enhancedCoords;
+        geoJSON.features[0].properties.doorwayEnhanced = true;
+        geoJSON.features[0].properties.originalPointCount = routeCoords.length;
+        geoJSON.features[0].properties.enhancedPointCount = enhancedCoords.length;
+        geoJSON.features[0].properties.doorwaysInserted = doorwayIntersections.length;
+      }
+
+      return geoJSON;
+    } catch (e) {
+      console.warn('enhanceRouteWithDoorways failed:', e.message);
+      return null;
+    }
+  }
+
+  /**
+   * Calculate Euclidean distance between two coordinate pairs
+   */
+  private coordDistance(coord1: number[], coord2: number[]): number {
+    return Math.hypot(coord1[0] - coord2[0], coord1[1] - coord2[1]);
+  }
+
+  /**
+   * Calculate perpendicular distance from a point to a line segment
+   */
+  private pointToLineDistance(
+    px: number, py: number,
+    x1: number, y1: number,
+    x2: number, y2: number
+  ): number {
+    const A = px - x1;
+    const B = py - y1;
+    const C = x2 - x1;
+    const D = y2 - y1;
+
+    const dot = A * C + B * D;
+    const lenSq = C * C + D * D;
+    let param = -1;
+
+    if (lenSq !== 0) param = dot / lenSq;
+
+    let xx, yy;
+
+    if (param < 0) {
+      xx = x1;
+      yy = y1;
+    } else if (param > 1) {
+      xx = x2;
+      yy = y2;
+    } else {
+      xx = x1 + param * C;
+      yy = y1 + param * D;
+    }
+
+    const dx = px - xx;
+    const dy = py - yy;
+    return Math.sqrt(dx * dx + dy * dy);
   }
 
   /**
@@ -1703,6 +2066,57 @@ export class FireSafetyService {
   }
 
   /**
+   * Finds the nearest exit node that is not in a fire zone
+   * Used when the requested destination is blocked by fire
+   *
+   * @param currentNodeId - User's current location node
+   * @returns Object with exit node info or null if none found
+   */
+  private async findNearestSafeExit(currentNodeId: number): Promise<{
+    nodeId: number;
+    description: string;
+    distance: number;
+  } | null> {
+    const blockedNodesSQL = this.getBlockedNodesSQL();
+
+    // Find exit nodes (type = 'exit' or 'emergency_exit') that are not blocked
+    // Ordered by distance from current location
+    const exitQuery = `
+      SELECT
+        n.id as node_id,
+        n.description,
+        n.type,
+        ST_Distance(
+          ST_Transform(n.geometry, 4326)::geography,
+          ST_Transform((SELECT geometry FROM nodes WHERE id = $1), 4326)::geography
+        ) as distance
+      FROM nodes n
+      WHERE n.type IN ('exit', 'emergency_exit', 'entry')
+        AND n.id NOT IN (${blockedNodesSQL})
+      ORDER BY distance ASC
+      LIMIT 5
+    `;
+
+    try {
+      const exits = await this.dataSource.query(exitQuery, [currentNodeId]);
+
+      if (!exits || exits.length === 0) {
+        return null;
+      }
+
+      // Return the nearest unblocked exit
+      return {
+        nodeId: exits[0].node_id,
+        description: exits[0].description || exits[0].type,
+        distance: exits[0].distance,
+      };
+    } catch (error) {
+      console.warn('findNearestSafeExit failed:', error.message);
+      return null;
+    }
+  }
+
+  /**
    * Gets all safe points for the building
    */
   async getAllSafePoints(): Promise<any[]> {
@@ -1794,5 +2208,54 @@ export class FireSafetyService {
     }
 
     return { computed, skipped };
+  }
+
+  // ============================================
+  // ISOLATION EVENT EMISSION
+  // ============================================
+
+  /**
+   * Emits a WebSocket event when an occupant is detected as isolated/trapped
+   * This notifies the rescue dashboard in real-time
+   *
+   * @param isolationInfo - The isolation analysis details
+   * @param trappedOccupantId - The registered trapped occupant ID
+   */
+  private emitIsolationEvent(
+    isolationInfo: any,
+    trappedOccupantId: number | null,
+  ): void {
+    try {
+      const globalAny: any = global as any;
+      const io =
+        globalAny.__io ||
+        (globalAny.__appInstance && globalAny.__appInstance.get
+          ? globalAny.__appInstance.get('io')
+          : null);
+
+      if (io && typeof io.emit === 'function') {
+        // Emit to rescue dashboard channel
+        io.emit('occupant.isolated', {
+          trappedOccupantId,
+          nodeId: isolationInfo.nodeId,
+          nodeName: isolationInfo.nodeName,
+          floorId: isolationInfo.floorId,
+          floorName: isolationInfo.floorName,
+          isolationReason: isolationInfo.isolationReason,
+          priorityLevel: isolationInfo.priorityLevel,
+          priorityScore: isolationInfo.priorityScore,
+          nearestFireDistance: isolationInfo.nearestFireDistance,
+          coordinates: isolationInfo.coordinates,
+          shelterInstructions: isolationInfo.shelterInstructions,
+          timestamp: new Date().toISOString(),
+        });
+
+        this.logger.log(
+          `Emitted occupant.isolated event for node ${isolationInfo.nodeId}`,
+        );
+      }
+    } catch (emitErr) {
+      this.logger.warn('Could not emit occupant.isolated event', emitErr);
+    }
   }
 }

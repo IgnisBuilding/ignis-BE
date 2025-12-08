@@ -20,6 +20,9 @@ import { exits } from './entities/exits.entity';
 import { edges } from './entities/edges.entity';
 import { hazards } from './entities/hazards.entity';
 import { EvacuationRoute } from './entities/evacuation_route.entity';
+import { rescue_teams } from './entities/rescue_teams.entity';
+import { trapped_occupants } from './entities/trapped_occupants.entity';
+import { isolation_events } from './entities/isolation_events.entity';
 
 @Module({
   imports: [
@@ -52,6 +55,9 @@ import { EvacuationRoute } from './entities/evacuation_route.entity';
         edges,
         hazards,
         EvacuationRoute,
+        rescue_teams,
+        trapped_occupants,
+        isolation_events,
       ],
       synchronize: false,
       logging: true,
