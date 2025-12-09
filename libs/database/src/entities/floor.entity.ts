@@ -1,30 +1,38 @@
-import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, JoinColumn } from 'typeorm';
+import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, JoinColumn, OneToMany } from 'typeorm';
 import { building } from './building.entity';
+import { apartment } from './apartment.entity';
 
 @Entity()
 export class floor {
-    @PrimaryGeneratedColumn()
-    id: number;
-    
-    @Column()
-    name: string;
+  @PrimaryGeneratedColumn()
+  id: number;
 
-    @Column('integer')
-    level: number;
+  @Column()
+  name: string;
 
-    @Column()
-    building_id: number;
+  @Column('integer')
+  level: number;
 
-    @ManyToOne(() => building)
-    @JoinColumn({ name: 'building_id' })
-    building: building;
+  @Column()
+  building_id: number;
 
-    @Column({ type: 'geometry', spatialFeatureType: 'Polygon', srid: 3857})
-    geometry: string;
+  @ManyToOne(() => building)
+  @JoinColumn({ name: 'building_id' })
+  building: building;
 
-    @Column({ type: 'timestamp', default: () => 'CURRENT_TIMESTAMP' })
-    created_at: Date;
+  @Column({ type: 'geometry', spatialFeatureType: 'Polygon', srid: 3857 })
+  geometry: string;
 
-    @Column({ type: 'timestamp', default: () => 'CURRENT_TIMESTAMP', onUpdate: 'CURRENT_TIMESTAMP' })
-    updated_at: Date;
-}  
+  @Column({ type: 'timestamp', default: () => 'CURRENT_TIMESTAMP' })
+  created_at: Date;
+
+  @Column({
+    type: 'timestamp',
+    default: () => 'CURRENT_TIMESTAMP',
+    onUpdate: 'CURRENT_TIMESTAMP',
+  })
+  updated_at: Date;
+
+  @OneToMany(() => apartment, (apartment) => apartment.floor)
+  apartments: apartment[];
+}

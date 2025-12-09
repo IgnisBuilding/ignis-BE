@@ -12,3 +12,6 @@ export * from './sensor.entity';
 export * from './resident.entity';
 export * from './alert.entity';
 export * from './safety_equipment.entity';
+export * from './rescue_teams.entity';
+export * from './trapped_occupants.entity';
+export * from './isolation_events.entity';

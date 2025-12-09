@@ -1,32 +1,42 @@
-import { Entity, PrimaryGeneratedColumn, Column, JoinColumn, ManyToOne } from 'typeorm';
+import {
+  Entity,
+  PrimaryGeneratedColumn,
+  Column,
+  JoinColumn,
+  ManyToOne,
+} from 'typeorm';
 import { nodes } from './nodes.entity';
 import { apartment } from './apartment.entity';
 
 @Entity()
 export class hazards {
-    @PrimaryGeneratedColumn()
-    id: number;
-    
-    @Column()
-    type: string;
+  @PrimaryGeneratedColumn()
+  id: number;
 
-    @ManyToOne(() => apartment)
-    @JoinColumn({ name: 'apartment_id' })
-    apartment: apartment;
+  @Column()
+  type: string;
 
-    @ManyToOne(() => nodes)
-    @JoinColumn({ name: 'node_id' })
-    node: nodes;
+  @ManyToOne(() => apartment)
+  @JoinColumn({ name: 'apartment_id' })
+  apartment: apartment;
 
-    @Column()
-    severity: string;
+  @ManyToOne(() => nodes)
+  @JoinColumn({ name: 'node_id' })
+  node: nodes;
 
-    @Column()
-    status: string;
+  @Column()
+  severity: string;
 
-    @Column({ type: 'timestamp', default: () => 'CURRENT_TIMESTAMP' })
-    created_at: Date;
+  @Column()
+  status: string;
 
-    @Column({ type: 'timestamp', default: () => 'CURRENT_TIMESTAMP', onUpdate: 'CURRENT_TIMESTAMP' })
-    updated_at: Date;
-}  
+  @Column({ type: 'timestamp', default: () => 'CURRENT_TIMESTAMP' })
+  created_at: Date;
+
+  @Column({
+    type: 'timestamp',
+    default: () => 'CURRENT_TIMESTAMP',
+    onUpdate: 'CURRENT_TIMESTAMP',
+  })
+  updated_at: Date;
+}

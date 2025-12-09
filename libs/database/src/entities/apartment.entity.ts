@@ -1,32 +1,57 @@
-import { Entity, PrimaryGeneratedColumn, Column, JoinColumn, ManyToOne } from 'typeorm';
+import {
+  Entity,
+  PrimaryGeneratedColumn,
+  Column,
+  JoinColumn,
+  ManyToOne,
+  OneToMany,
+} from 'typeorm';
 import { floor } from './floor.entity';
 import { User } from './user.entity';
+import { room } from './room.entity';
+import { Resident } from './resident.entity';
 
 @Entity()
 export class apartment {
-    @PrimaryGeneratedColumn()
-    id: number;
-    
-    @Column()
-    unit_number: string;
+  @PrimaryGeneratedColumn()
+  id: number;
 
-    @ManyToOne(()=>floor)
-    @JoinColumn({ name: 'floor_id' })
-    floor: floor;
+  @Column()
+  unit_number: string;
 
-    @Column({ type: 'boolean', default: false })
-    occupied: boolean;
+  @Column()
+  floor_id: number;
 
-    @ManyToOne(() => User, (user) => user.apartments, { nullable: true })
-    @JoinColumn({ name: 'user_id' })
-    user: User;
+  @ManyToOne(() => floor, (floor) => floor.apartments)
+  @JoinColumn({ name: 'floor_id' })
+  floor: floor;
 
-    @Column({ name: 'user_id', nullable: true })
-    userId: number;
+  @ManyToOne(() => User, (user) => user.apartments, { nullable: true })
+  @JoinColumn({ name: 'user_id' })
+  user: User;
 
-    @Column({ type: 'timestamp', default: () => 'CURRENT_TIMESTAMP' })
-    created_at: Date;
+  @Column({ name: 'user_id', nullable: true })
+  userId: number;
 
-    @Column({ type: 'timestamp', default: () => 'CURRENT_TIMESTAMP', onUpdate: 'CURRENT_TIMESTAMP' })
-    updated_at: Date;
-}  
+  @Column({ type: 'boolean', default: false })
+  occupied: boolean;
+
+  @Column({ type: 'geometry', spatialFeatureType: 'Polygon', srid: 3857 })
+  geometry: string;
+
+  @Column({ type: 'timestamp', default: () => 'CURRENT_TIMESTAMP' })
+  created_at: Date;
+
+  @Column({
+    type: 'timestamp',
+    default: () => 'CURRENT_TIMESTAMP',
+    onUpdate: 'CURRENT_TIMESTAMP',
+  })
+  updated_at: Date;
+
+  @OneToMany(() => room, (room) => room.apartment)
+  rooms: room[];
+
+  @OneToMany(() => Resident, (resident) => resident.apartment)
+  residents: Resident[];
+}

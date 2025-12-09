@@ -11,7 +11,9 @@ describe('SocietyManagementController', () => {
       providers: [SocietyManagementService],
     }).compile();
 
-    societyManagementController = app.get<SocietyManagementController>(SocietyManagementController);
+    societyManagementController = app.get<SocietyManagementController>(
+      SocietyManagementController,
+    );
   });
 
   describe('root', () => {

@@ -5,7 +5,25 @@ import { JwtModule } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
 import { FireSafetyController } from './fire_safety.controller';
 import { FireSafetyService } from './fire_safety.service';
-import { edges, EvacuationRoute, nodes, building, floor, apartment, room, exits, hazards, User, Sensor, Resident, Alert, SafetyEquipment } from '@app/entities';
+import { 
+  edges, 
+  EvacuationRoute, 
+  nodes, 
+  building, 
+  floor, 
+  apartment, 
+  room, 
+  exits, 
+  hazards, 
+  User, 
+  Sensor, 
+  Resident, 
+  Alert, 
+  SafetyEquipment,
+  rescue_teams,
+  trapped_occupants,
+  isolation_events
+} from '@app/entities';
 import { AuthController } from './controllers/auth.controller';
 import { SensorController } from './controllers/sensor.controller';
 import { ResidentController } from './controllers/resident.controller';
@@ -22,6 +40,7 @@ import { AlertService } from './services/alert.service';
 import { HazardService } from './services/hazard.service';
 import { SafetyEquipmentService } from './services/safety-equipment.service';
 import { ApartmentService } from './services/apartment.service';
+import { IsolationDetectionService } from './isolation-detection.service';
 import { JwtStrategy } from './strategies/jwt.strategy';
 
 @Module({
@@ -36,9 +55,49 @@ import { JwtStrategy } from './strategies/jwt.strategy';
       }),
       inject: [ConfigService],
     }),
-    TypeOrmModule.forFeature([EvacuationRoute, nodes, edges, building, floor, apartment, room, exits, hazards, User, Sensor, Resident, Alert, SafetyEquipment]),
+    TypeOrmModule.forFeature([
+      EvacuationRoute,
+      nodes,
+      edges,
+      building,
+      floor,
+      apartment,
+      room,
+      exits,
+      hazards,
+      User,
+      Sensor,
+      Resident,
+      Alert,
+      SafetyEquipment,
+      rescue_teams,
+      trapped_occupants,
+      isolation_events,
+    ]),
   ],
-  controllers: [FireSafetyController, AuthController, SensorController, ResidentController, BuildingController, DashboardController, AlertController, HazardController, SafetyEquipmentController, ApartmentController],
-  providers: [FireSafetyService, AuthService, SensorService, ResidentService, AlertService, HazardService, SafetyEquipmentService, ApartmentService, JwtStrategy],
+  controllers: [
+    FireSafetyController,
+    AuthController,
+    SensorController,
+    ResidentController,
+    BuildingController,
+    DashboardController,
+    AlertController,
+    HazardController,
+    SafetyEquipmentController,
+    ApartmentController,
+  ],
+  providers: [
+    FireSafetyService,
+    AuthService,
+    SensorService,
+    ResidentService,
+    AlertService,
+    HazardService,
+    SafetyEquipmentService,
+    ApartmentService,
+    IsolationDetectionService,
+    JwtStrategy,
+  ],
 })
 export class FireSafetyModule {}
