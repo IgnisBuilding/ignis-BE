@@ -1,14 +1,15 @@
 {
   "$schema": "https://json.schemastore.org/nest-cli",
   "collection": "@nestjs/schematics",
-  "sourceRoot": "apps/ignis-be/src",
+  "sourceRoot": "apps/fireSafety/src",
   "compilerOptions": {
     "deleteOutDir": true,
     "webpack": true,
-    "tsConfigPath": "apps/ignis-be/tsconfig.app.json"
+    "webpackConfigPath": "webpack.config.js",
+    "tsConfigPath": "apps/fireSafety/tsconfig.app.json"
   },
   "monorepo": true,
-  "root": "apps/ignis-be",
+  "root": "apps/fireSafety",
   "projects": {
     "auth": {
       "type": "library",
@@ -46,13 +47,13 @@
         "tsConfigPath": "libs/database/tsconfig.lib.json"
       }
     },
-    "fire_safety": {
+    "fireSafety": {
       "type": "application",
-      "root": "apps/fire_safety",
+      "root": "apps/fireSafety",
       "entryFile": "main",
-      "sourceRoot": "apps/fire_safety/src",
+      "sourceRoot": "apps/fireSafety/src",
       "compilerOptions": {
-        "tsConfigPath": "apps/fire_safety/tsconfig.app.json"
+        "tsConfigPath": "apps/fireSafety/tsconfig.app.json"
       }
     },
     "ignis-be": {

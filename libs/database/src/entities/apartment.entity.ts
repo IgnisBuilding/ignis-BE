@@ -1,5 +1,6 @@
 import { Entity, PrimaryGeneratedColumn, Column, JoinColumn, ManyToOne } from 'typeorm';
 import { floor } from './floor.entity';
+import { User } from './user.entity';
 
 @Entity()
 export class apartment {
@@ -16,9 +17,12 @@ export class apartment {
     @Column({ type: 'boolean', default: false })
     occupied: boolean;
 
-    //Needed to be updated when user table is created
-    @Column()
-    owner_id: number;
+    @ManyToOne(() => User, (user) => user.apartments, { nullable: true })
+    @JoinColumn({ name: 'user_id' })
+    user: User;
+
+    @Column({ name: 'user_id', nullable: true })
+    userId: number;
 
     @Column({ type: 'timestamp', default: () => 'CURRENT_TIMESTAMP' })
     created_at: Date;

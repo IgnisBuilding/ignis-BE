@@ -1,4 +1,5 @@
-import { Entity, PrimaryGeneratedColumn, Column } from 'typeorm';
+import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, JoinColumn } from 'typeorm';
+import { building } from './building.entity';
 
 @Entity()
 export class floor {
@@ -13,6 +14,10 @@ export class floor {
 
     @Column()
     building_id: number;
+
+    @ManyToOne(() => building)
+    @JoinColumn({ name: 'building_id' })
+    building: building;
 
     @Column({ type: 'geometry', spatialFeatureType: 'Polygon', srid: 3857})
     geometry: string;

@@ -13,13 +13,16 @@ import { floor } from './entities/floor.entity';
 import { incident_log } from './entities/incident_log.entity';
 import { meter } from './entities/meter.entity';
 import {meter_reading} from './entities/meter_reading.entity';
-import {sensor} from './entities/sensor.entity';
 import {sensor_log} from './entities/sensor_log.entity';
 import {nodes} from './entities/nodes.entity';
 import { exits } from './entities/exits.entity';
 import { edges } from './entities/edges.entity';
 import { hazards } from './entities/hazards.entity';
 import { EvacuationRoute } from './entities/evacuation_route.entity';
+import { room } from './entities/room.entity';
+import { User } from './entities/user.entity';
+import { Sensor } from './entities/sensor.entity';
+import { Resident } from './entities/resident.entity';
 
 @Module({
   imports :[
@@ -33,7 +36,7 @@ import { EvacuationRoute } from './entities/evacuation_route.entity';
       username: process.env.DB_USER,
       password: process.env.DB_PASS,
       database: process.env.DB_NAME,
-      entities: [Society, notification, payment, bill, apartment, bill_split, building, floor, incident_log, meter, meter_reading, sensor, sensor_log, nodes, exits, edges, hazards, EvacuationRoute],
+      entities: [Society, notification, payment, bill, apartment, bill_split, building, floor, incident_log, meter, meter_reading, sensor_log, nodes, exits, edges, hazards, EvacuationRoute, room, User, Sensor, Resident],
       synchronize: false,
       logging: true,
       migrations: [__dirname + '/migrations/*.ts']
@@ -41,3 +44,4 @@ import { EvacuationRoute } from './entities/evacuation_route.entity';
   ]
 })
 export class DatabaseModule {}
+

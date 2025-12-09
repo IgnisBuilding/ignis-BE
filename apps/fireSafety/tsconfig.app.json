@@ -2,11 +2,12 @@
   "extends": "../../tsconfig.json",
   "compilerOptions": {
     "declaration": false,
-    "outDir": "../../dist/apps/fire_safety",
+    "outDir": "../../dist/apps/fireSafety",
     "baseUrl": ".",
     "paths": {
-      "@app/entities": ["libs/database/entities/src"],
-      "@app/entities/*": ["libs/database/entities/src/*"]
+      "@app/database": ["../../libs/database/src"],
+      "@app/entities": ["../../libs/database/src/entities"],
+      "@app/entities/*": ["../../libs/database/src/entities/*"]
     }
   },
   "include": ["src/**/*"],
