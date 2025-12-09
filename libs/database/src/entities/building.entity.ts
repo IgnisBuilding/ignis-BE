@@ -2,27 +2,31 @@ import { Entity, PrimaryGeneratedColumn, Column } from 'typeorm';
 
 @Entity()
 export class building {
-    @PrimaryGeneratedColumn()
-    id: number;
-    
-    @Column()
-    name: string;
+  @PrimaryGeneratedColumn()
+  id: number;
 
-    @Column()
-    type: string;
+  @Column()
+  name: string;
 
-    @Column()
-    address: string;
+  @Column()
+  type: string;
 
-    @Column({ type: 'geometry', spatialFeatureType: 'Polygon', srid: 3857})
-    geometry: string;
+  @Column()
+  address: string;
 
-    @Column()
-    society_id: number;
+  @Column({ type: 'geometry', spatialFeatureType: 'Polygon', srid: 3857 })
+  geometry: string;
 
-    @Column({ type: 'timestamp', default: () => 'CURRENT_TIMESTAMP' })
-    created_at: Date;
+  @Column()
+  society_id: number;
 
-    @Column({ type: 'timestamp', default: () => 'CURRENT_TIMESTAMP', onUpdate: 'CURRENT_TIMESTAMP' })
-    updated_at: Date;
-}  
+  @Column({ type: 'timestamp', default: () => 'CURRENT_TIMESTAMP' })
+  created_at: Date;
+
+  @Column({
+    type: 'timestamp',
+    default: () => 'CURRENT_TIMESTAMP',
+    onUpdate: 'CURRENT_TIMESTAMP',
+  })
+  updated_at: Date;
+}

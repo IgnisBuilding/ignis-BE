@@ -42,4 +42,4 @@ export class Sensor {
 
     @Column({ name: 'last_reading', type: 'timestamp', nullable: true })
     lastReading: Date;
-}  
+}
