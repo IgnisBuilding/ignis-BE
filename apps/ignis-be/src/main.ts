@@ -8,8 +8,12 @@ async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
   // Enable CORS for the frontend (adjust origin as needed)
+  const allowedOrigins = process.env.ALLOWED_ORIGIN
+    ? process.env.ALLOWED_ORIGIN.split(',')
+    : ['http://localhost:4000', 'http://localhost:5173', 'http://localhost:3000'];
+
   app.enableCors({
-    origin: process.env.ALLOWED_ORIGIN || 'http://localhost:4000',
+    origin: allowedOrigins,
     credentials: true,
   });
 
@@ -22,7 +26,7 @@ async function bootstrap() {
   const server = app.getHttpServer();
   const io = new IOServer(server, {
     cors: {
-      origin: process.env.ALLOWED_ORIGIN || 'http://localhost:4000',
+      origin: allowedOrigins,
       methods: ['GET', 'POST'],
       credentials: true,
     },
