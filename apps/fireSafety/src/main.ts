@@ -19,7 +19,7 @@ async function bootstrap() {
   }));
 
   // The port is defined here!
-  await app.listen(3001);
-  console.log(`🔥 Fire Safety API is running on: http://localhost:3001`);
+  await app.listen(7000);
+  console.log(`🔥 Fire Safety API is running on: http://localhost:7000`);
 }
 bootstrap();
