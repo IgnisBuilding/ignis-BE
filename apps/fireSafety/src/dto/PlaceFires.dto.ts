@@ -1,8 +1,7 @@
-// CREATE THIS NEW FILE
 import {
   IsArray,
   IsString,
-  IsEnum,
+  IsIn,
   ValidateNested,
   IsInt,
   IsNumber,
@@ -33,6 +32,11 @@ class FireZoneDto {
 }
 
 /**
+ * Severity levels for fire hazards
+ */
+const SEVERITY_LEVELS = ['HIGH', 'CRITICAL'] as const;
+
+/**
  * DTO for placing multiple fire zones
  */
 export class PlaceFiresDto {
@@ -41,7 +45,7 @@ export class PlaceFiresDto {
   @Type(() => FireZoneDto)
   fireZones: FireZoneDto[];
 
-  @IsEnum(['HIGH', 'CRITICAL'])
+  @IsIn(SEVERITY_LEVELS, { message: 'severity must be either HIGH or CRITICAL' })
   severity: 'HIGH' | 'CRITICAL';
 
   @IsString()
