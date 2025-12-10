@@ -319,22 +319,35 @@ export class FireSafetyService {
    * a room that's on fire, and those must also be blocked.
    */
   private async getBlockedNodeIds(): Promise<number[]> {
+    // Get blocked nodes - EXCLUDING hallway/passage/foyer nodes
+    // Fire in hallways/passages only adds cost penalty, doesn't block the node
     const query = `
       WITH fire_rooms AS (
-        -- Get the room geometries where fires are active
+        -- Get the room geometries where fires are active (EXCLUDING hallways/passages)
         SELECT DISTINCT r.geometry as room_geom, h.node_id as fire_node_id
         FROM hazards h
         JOIN nodes n ON h.node_id = n.id
         LEFT JOIN room r ON ST_Intersects(n.geometry, r.geometry)
         WHERE h.status = 'ACTIVE'
+          -- Don't consider hallways/passages as fire rooms
+          AND r.name NOT ILIKE ANY(ARRAY['%hall%', '%corridor%', '%passage%', '%foyer%', '%lobby%', '%stoop%'])
+      ),
+      blocked_hazard_nodes AS (
+        -- Hazard nodes that are NOT in hallways/passages (these should be blocked)
+        SELECT DISTINCT h.node_id
+        FROM hazards h
+        JOIN nodes n ON h.node_id = n.id
+        JOIN room r ON ST_Intersects(n.geometry, r.geometry)
+        WHERE h.status = 'ACTIVE'
+          AND r.name NOT ILIKE ANY(ARRAY['%hall%', '%corridor%', '%passage%', '%foyer%', '%lobby%', '%stoop%'])
       ),
       blocked_nodes AS (
-        -- Get all nodes inside fire rooms OR directly marked as fire
+        -- Get all nodes inside fire rooms OR directly marked as fire (if not in hallway)
         SELECT DISTINCT n.id
         FROM nodes n
         LEFT JOIN fire_rooms fr ON ST_Within(n.geometry, fr.room_geom)
-        LEFT JOIN hazards h ON n.id = h.node_id AND h.status = 'ACTIVE'
-        WHERE fr.room_geom IS NOT NULL OR h.id IS NOT NULL
+        LEFT JOIN blocked_hazard_nodes bhn ON n.id = bhn.node_id
+        WHERE fr.room_geom IS NOT NULL OR bhn.node_id IS NOT NULL
       )
       SELECT id FROM blocked_nodes;
     `;
@@ -346,9 +359,15 @@ export class FireSafetyService {
       return blockedIds;
     } catch (error) {
       console.warn('Failed to get blocked nodes, falling back to hazard nodes only:', error.message);
-      // Fallback to just hazard nodes
+      // Fallback to just hazard nodes (excluding those in hallways)
       const fallbackResult = await this.dataSource.query(
-        `SELECT DISTINCT node_id as id FROM hazards WHERE status = 'ACTIVE' AND node_id IS NOT NULL`
+        `SELECT DISTINCT h.node_id as id
+         FROM hazards h
+         JOIN nodes n ON h.node_id = n.id
+         JOIN room r ON ST_Intersects(n.geometry, r.geometry)
+         WHERE h.status = 'ACTIVE'
+           AND h.node_id IS NOT NULL
+           AND r.name NOT ILIKE ANY(ARRAY['%hall%', '%corridor%', '%passage%', '%foyer%', '%lobby%', '%stoop%'])`
       );
       return fallbackResult.map((r: any) => r.id as number);
     }
@@ -358,8 +377,10 @@ export class FireSafetyService {
    * Generates SQL for blocked nodes list (for use in queries)
    *
    * BLOCKING LOGIC:
-   * 1. Always block the hazard node itself (fire location)
-   * 2. Block ALL nodes geometrically inside the fire room
+   * 1. Block hazard nodes ONLY if they are NOT in a hallway/passage/foyer
+   *    - Fire in hallways/passages only adds cost penalty, doesn't block the node
+   *    - This allows routes to pass through (at high cost) when necessary
+   * 2. Block ALL nodes geometrically inside fire room (non-hallway rooms only)
    *
    * Note: Corridor/junction nodes should be positioned OUTSIDE room boundaries
    * (in hallways/passages). If they intersect with regular rooms, they will be
@@ -384,10 +405,19 @@ export class FireSafetyService {
           -- Don't consider hallways/passages as fire rooms
           AND r.name NOT ILIKE ANY(ARRAY['%hall%', '%corridor%', '%passage%', '%foyer%', '%lobby%', '%stoop%'])
       ) fire_rooms ON ST_Intersects(n.geometry, fire_rooms.room_geom)
-      LEFT JOIN hazards h ON n.id = h.node_id AND h.status = 'ACTIVE'
+      -- Join to find hazard nodes that are NOT in hallway/passage rooms
+      LEFT JOIN (
+        SELECT h.node_id
+        FROM hazards h
+        JOIN nodes hn ON h.node_id = hn.id
+        JOIN room r ON ST_Intersects(hn.geometry, r.geometry)
+        WHERE h.status = 'ACTIVE'
+          -- Only block hazard node if it's NOT in a hallway/passage
+          AND r.name NOT ILIKE ANY(ARRAY['%hall%', '%corridor%', '%passage%', '%foyer%', '%lobby%', '%stoop%'])
+      ) blocked_hazard_nodes ON n.id = blocked_hazard_nodes.node_id
       WHERE
-        -- Block the hazard node itself
-        h.id IS NOT NULL
+        -- Block hazard nodes ONLY if they are in non-hallway rooms
+        blocked_hazard_nodes.node_id IS NOT NULL
         -- Block all nodes inside the fire room geometry
         OR fire_rooms.room_geom IS NOT NULL
     `;
