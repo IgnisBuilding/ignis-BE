@@ -1,8 +1,11 @@
 const path = require('path');
 
 module.exports = function (options, webpack) {
+  const isDevelopment = process.env.NODE_ENV !== 'production';
+  
   return {
     ...options,
+    cache: isDevelopment ? false : options.cache,
     externals: {
       bcrypt: 'commonjs bcrypt',
     },
