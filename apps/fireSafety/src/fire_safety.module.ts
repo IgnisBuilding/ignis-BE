@@ -22,7 +22,8 @@ import {
   SafetyEquipment,
   rescue_teams,
   trapped_occupants,
-  isolation_events
+  isolation_events,
+  Society
 } from '@app/entities';
 import { AuthController } from './controllers/auth.controller';
 import { SensorController } from './controllers/sensor.controller';
@@ -73,6 +74,7 @@ import { JwtStrategy } from './strategies/jwt.strategy';
       rescue_teams,
       trapped_occupants,
       isolation_events,
+      Society,
     ]),
   ],
   controllers: [

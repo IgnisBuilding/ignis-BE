@@ -15,3 +15,5 @@ export * from './safety_equipment.entity';
 export * from './rescue_teams.entity';
 export * from './trapped_occupants.entity';
 export * from './isolation_events.entity';
+export * from './society.entity';
+export { Society } from './society.entity';
