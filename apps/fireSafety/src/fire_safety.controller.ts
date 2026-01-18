@@ -294,106 +294,48 @@ export class FireSafetyController {
   }
 
   // Get room-to-node mapping for navigation
-  // Door markers are placed at room BOUNDARIES (where rooms touch) not at room centers
+  // Maps each room to its nearest navigation node for routing
   @Get('room-nodes')
   async getRoomNodes() {
     try {
-      // Compute door positions from room boundary intersections
-      // Find where rooms share boundaries and place markers there
+      // Find the nearest actual node to each room's centroid
+      // This ensures we return real node IDs that exist in the nodes table
       const query = `
-        WITH room_boundaries AS (
-          -- Find all room pairs that share a boundary (door locations)
+        WITH room_centers AS (
+          -- Get room center points
           SELECT
-            r1.id as room_id,
-            r1.name as room_name,
-            r2.id as adjacent_room_id,
-            r2.name as adjacent_room_name,
+            r.id as room_id,
+            r.name as room_name,
+            r.floor_id,
             f.level as floor_level,
-            -- The door position is the centroid of the shared boundary
-            ST_Centroid(ST_Intersection(r1.geometry, r2.geometry)) as door_geometry
-          FROM room r1
-          JOIN room r2 ON r1.id < r2.id
-            AND r1.floor_id = r2.floor_id
-            AND ST_Touches(r1.geometry, r2.geometry)
-          JOIN floor f ON r1.floor_id = f.id
+            ST_Centroid(r.geometry) as room_center
+          FROM room r
+          JOIN floor f ON r.floor_id = f.id
         ),
-        room_door_positions AS (
-          -- For each room, get all its door positions with type determination
-          SELECT DISTINCT ON (room_id)
-            room_id,
-            room_name,
-            floor_level,
-            ST_X(ST_Transform(door_geometry, 4326)) as longitude,
-            ST_Y(ST_Transform(door_geometry, 4326)) as latitude,
-            adjacent_room_name,
-            -- Determine door type based on room names and connections
-            CASE
-              WHEN LOWER(room_name) LIKE '%stair%' OR LOWER(adjacent_room_name) LIKE '%stair%'
-                   OR LOWER(room_name) LIKE '%basement%' OR LOWER(adjacent_room_name) LIKE '%basement%' THEN 'stairs'
-              WHEN LOWER(room_name) LIKE '%foyer%' OR LOWER(room_name) LIKE '%entry%'
-                   OR LOWER(room_name) LIKE '%porch%' OR LOWER(room_name) LIKE '%vestibule%' THEN 'entry'
-              WHEN LOWER(adjacent_room_name) LIKE '%foyer%' OR LOWER(adjacent_room_name) LIKE '%entry%'
-                   OR LOWER(adjacent_room_name) LIKE '%porch%' THEN 'entry'
-              WHEN LOWER(room_name) LIKE '%garage%' OR LOWER(adjacent_room_name) LIKE '%garage%' THEN 'exit'
-              WHEN LOWER(room_name) LIKE '%hall%' OR LOWER(adjacent_room_name) LIKE '%hall%' THEN 'doorway'
-              ELSE 'doorway'
-            END as node_type,
-            -- Priority for DISTINCT ON selection: prefer entry/exit connections
-            CASE
-              WHEN LOWER(adjacent_room_name) LIKE '%foyer%' OR LOWER(adjacent_room_name) LIKE '%entry%' THEN 1
-              WHEN LOWER(adjacent_room_name) LIKE '%hall%' THEN 2
-              WHEN LOWER(adjacent_room_name) LIKE '%stair%' OR LOWER(adjacent_room_name) LIKE '%basement%' THEN 3
-              ELSE 4
-            END as priority
-          FROM room_boundaries
-          UNION ALL
-          -- Also include the adjacent room's perspective
-          SELECT DISTINCT ON (adjacent_room_id)
-            adjacent_room_id as room_id,
-            adjacent_room_name as room_name,
-            floor_level,
-            ST_X(ST_Transform(door_geometry, 4326)) as longitude,
-            ST_Y(ST_Transform(door_geometry, 4326)) as latitude,
-            room_name as adjacent_room_name,
-            CASE
-              WHEN LOWER(adjacent_room_name) LIKE '%stair%' OR LOWER(room_name) LIKE '%stair%'
-                   OR LOWER(adjacent_room_name) LIKE '%basement%' OR LOWER(room_name) LIKE '%basement%' THEN 'stairs'
-              WHEN LOWER(adjacent_room_name) LIKE '%foyer%' OR LOWER(adjacent_room_name) LIKE '%entry%'
-                   OR LOWER(adjacent_room_name) LIKE '%porch%' THEN 'entry'
-              WHEN LOWER(room_name) LIKE '%foyer%' OR LOWER(room_name) LIKE '%entry%'
-                   OR LOWER(room_name) LIKE '%porch%' THEN 'entry'
-              WHEN LOWER(adjacent_room_name) LIKE '%garage%' OR LOWER(room_name) LIKE '%garage%' THEN 'exit'
-              WHEN LOWER(adjacent_room_name) LIKE '%hall%' OR LOWER(room_name) LIKE '%hall%' THEN 'doorway'
-              ELSE 'doorway'
-            END as node_type,
-            CASE
-              WHEN LOWER(room_name) LIKE '%foyer%' OR LOWER(room_name) LIKE '%entry%' THEN 1
-              WHEN LOWER(room_name) LIKE '%hall%' THEN 2
-              WHEN LOWER(room_name) LIKE '%stair%' OR LOWER(room_name) LIKE '%basement%' THEN 3
-              ELSE 4
-            END as priority
-          FROM room_boundaries
-        ),
-        final_positions AS (
-          SELECT DISTINCT ON (room_id)
-            room_id,
-            room_name,
-            floor_level,
-            longitude,
-            latitude,
-            node_type
-          FROM room_door_positions
-          ORDER BY room_id, priority ASC
+        room_nearest_node AS (
+          -- For each room, find the nearest node on the same floor
+          SELECT DISTINCT ON (rc.room_id)
+            rc.room_id,
+            rc.room_name,
+            rc.floor_level,
+            n.id as node_id,
+            n.type as node_type,
+            ST_X(ST_Transform(n.geometry, 4326)) as longitude,
+            ST_Y(ST_Transform(n.geometry, 4326)) as latitude,
+            ST_Distance(rc.room_center, n.geometry) as distance
+          FROM room_centers rc
+          JOIN nodes n ON n.floor_id = rc.floor_id
+          ORDER BY rc.room_id, ST_Distance(rc.room_center, n.geometry) ASC
         )
         SELECT
           room_id,
           room_name,
-          room_id as node_id,  -- Use room_id as pseudo node_id
+          node_id,
           node_type,
           floor_level,
           longitude,
           latitude
-        FROM final_positions
+        FROM room_nearest_node
         ORDER BY floor_level, room_id;
       `;
       const result = await this.dataSource.query(query);

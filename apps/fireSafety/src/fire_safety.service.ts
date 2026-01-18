@@ -330,7 +330,7 @@ export class FireSafetyService {
         LEFT JOIN room r ON ST_Intersects(n.geometry, r.geometry)
         WHERE h.status = 'ACTIVE'
           -- Don't consider hallways/passages as fire rooms
-          AND r.name NOT ILIKE ANY(ARRAY['%hall%', '%corridor%', '%passage%', '%foyer%', '%lobby%', '%stoop%'])
+          AND r.name NOT ILIKE ALL(ARRAY['%hall%', '%corridor%', '%passage%', '%foyer%', '%lobby%', '%stoop%'])
       ),
       blocked_hazard_nodes AS (
         -- Hazard nodes that are NOT in hallways/passages (these should be blocked)
@@ -339,7 +339,7 @@ export class FireSafetyService {
         JOIN nodes n ON h.node_id = n.id
         JOIN room r ON ST_Intersects(n.geometry, r.geometry)
         WHERE h.status = 'ACTIVE'
-          AND r.name NOT ILIKE ANY(ARRAY['%hall%', '%corridor%', '%passage%', '%foyer%', '%lobby%', '%stoop%'])
+          AND r.name NOT ILIKE ALL(ARRAY['%hall%', '%corridor%', '%passage%', '%foyer%', '%lobby%', '%stoop%'])
       ),
       blocked_nodes AS (
         -- Get all nodes inside fire rooms OR directly marked as fire (if not in hallway)
@@ -367,7 +367,7 @@ export class FireSafetyService {
          JOIN room r ON ST_Intersects(n.geometry, r.geometry)
          WHERE h.status = 'ACTIVE'
            AND h.node_id IS NOT NULL
-           AND r.name NOT ILIKE ANY(ARRAY['%hall%', '%corridor%', '%passage%', '%foyer%', '%lobby%', '%stoop%'])`
+           AND r.name NOT ILIKE ALL(ARRAY['%hall%', '%corridor%', '%passage%', '%foyer%', '%lobby%', '%stoop%'])`
       );
       return fallbackResult.map((r: any) => r.id as number);
     }
@@ -403,7 +403,7 @@ export class FireSafetyService {
         JOIN room r ON ST_Intersects(hn.geometry, r.geometry)
         WHERE h.status = 'ACTIVE'
           -- Don't consider hallways/passages as fire rooms
-          AND r.name NOT ILIKE ANY(ARRAY['%hall%', '%corridor%', '%passage%', '%foyer%', '%lobby%', '%stoop%'])
+          AND r.name NOT ILIKE ALL(ARRAY['%hall%', '%corridor%', '%passage%', '%foyer%', '%lobby%', '%stoop%'])
       ) fire_rooms ON ST_Intersects(n.geometry, fire_rooms.room_geom)
       -- Join to find hazard nodes that are NOT in hallway/passage rooms
       LEFT JOIN (
@@ -413,7 +413,7 @@ export class FireSafetyService {
         JOIN room r ON ST_Intersects(hn.geometry, r.geometry)
         WHERE h.status = 'ACTIVE'
           -- Only block hazard node if it's NOT in a hallway/passage
-          AND r.name NOT ILIKE ANY(ARRAY['%hall%', '%corridor%', '%passage%', '%foyer%', '%lobby%', '%stoop%'])
+          AND r.name NOT ILIKE ALL(ARRAY['%hall%', '%corridor%', '%passage%', '%foyer%', '%lobby%', '%stoop%'])
       ) blocked_hazard_nodes ON n.id = blocked_hazard_nodes.node_id
       WHERE
         -- Block hazard nodes ONLY if they are in non-hallway rooms
@@ -436,7 +436,7 @@ export class FireSafetyService {
       JOIN nodes hn ON h.node_id = hn.id
       JOIN room r ON ST_Intersects(hn.geometry, r.geometry)
       WHERE h.status = 'ACTIVE'
-        AND r.name NOT ILIKE ANY(ARRAY['%hall%', '%corridor%', '%passage%', '%foyer%', '%lobby%', '%stoop%'])
+        AND r.name NOT ILIKE ALL(ARRAY['%hall%', '%corridor%', '%passage%', '%foyer%', '%lobby%', '%stoop%'])
     `;
   }
 
@@ -673,12 +673,13 @@ export class FireSafetyService {
       // Get the edge blocking condition (edges that cross through fire rooms)
       // TC_01 FIX: When escaping from fire, allow edges directly connected to the escape node
       // even if they cross through fire room geometry (person needs to leave the fire room)
+      // ALSO: Always allow edges connected to the END node (exit) to ensure reachability
       const blockedEdgesCondition = escapeFromFireNode
         ? `(NOT EXISTS (
             SELECT 1
             FROM (${this.getFireRoomGeometriesSQL()}) fire_rooms
             WHERE ST_Intersects(e.geometry, fire_rooms.room_geom)
-          ) OR e.source_id = ${escapeFromFireNode} OR e.target_id = ${escapeFromFireNode})`
+          ) OR e.source_id = ${escapeFromFireNode} OR e.target_id = ${escapeFromFireNode} OR e.source_id = ${endNodeId} OR e.target_id = ${endNodeId})`
         : this.getBlockedEdgesConditionSQL();
 
       // If escaping from fire, we need to allow edges departing from the fire node

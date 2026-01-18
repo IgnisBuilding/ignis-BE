@@ -108,54 +108,64 @@ export class NavigationGraphEnhancements1733590800000 implements MigrationInterf
     `);
 
     // ============================================================
-    // PART 4: ADD CORRIDOR AND JUNCTION NODES
+    // PART 4: ADD CORRIDOR AND JUNCTION NODES (only if floors exist)
     // ============================================================
 
-    // Ground Floor (floor_id = 1) Corridor Nodes
-    // Main horizontal corridor running through the center
-    await queryRunner.query(`
-      INSERT INTO nodes (type, node_category, geometry, floor_id, description, created_at, updated_at)
-      VALUES
-        -- Main corridor segments (Ground Floor)
-        ('corridor', 'corridor', ST_SetSRID(ST_MakePoint(-8235172.0, 4978252.0), 3857), 1, 'Ground Floor - Main Corridor West', NOW(), NOW()),
-        ('corridor', 'corridor', ST_SetSRID(ST_MakePoint(-8235170.0, 4978252.0), 3857), 1, 'Ground Floor - Main Corridor Center-West', NOW(), NOW()),
-        ('corridor', 'corridor', ST_SetSRID(ST_MakePoint(-8235168.0, 4978252.0), 3857), 1, 'Ground Floor - Main Corridor Center', NOW(), NOW()),
-        ('corridor', 'corridor', ST_SetSRID(ST_MakePoint(-8235166.0, 4978252.0), 3857), 1, 'Ground Floor - Main Corridor Center-East', NOW(), NOW()),
-        ('corridor', 'corridor', ST_SetSRID(ST_MakePoint(-8235164.0, 4978252.0), 3857), 1, 'Ground Floor - Main Corridor East', NOW(), NOW()),
+    // Check if floors exist before inserting nodes that reference them
+    const floorsExist = await queryRunner.query(`SELECT COUNT(*) as count FROM floor`);
+    const hasFloors = floorsExist[0]?.count > 0;
 
-        -- Upper corridor (Ground Floor)
-        ('corridor', 'corridor', ST_SetSRID(ST_MakePoint(-8235172.0, 4978256.0), 3857), 1, 'Ground Floor - Upper Corridor West', NOW(), NOW()),
-        ('corridor', 'corridor', ST_SetSRID(ST_MakePoint(-8235168.0, 4978256.0), 3857), 1, 'Ground Floor - Upper Corridor Center', NOW(), NOW()),
-        ('corridor', 'corridor', ST_SetSRID(ST_MakePoint(-8235164.0, 4978256.0), 3857), 1, 'Ground Floor - Upper Corridor East', NOW(), NOW()),
+    if (hasFloors) {
+      // Ground Floor (floor_id = 1) Corridor Nodes
+      // Main horizontal corridor running through the center
+      await queryRunner.query(`
+        INSERT INTO nodes (type, node_category, geometry, floor_id, description, created_at, updated_at)
+        SELECT * FROM (VALUES
+          -- Main corridor segments (Ground Floor)
+          ('corridor', 'corridor', ST_SetSRID(ST_MakePoint(-8235172.0, 4978252.0), 3857), 1, 'Ground Floor - Main Corridor West', NOW(), NOW()),
+          ('corridor', 'corridor', ST_SetSRID(ST_MakePoint(-8235170.0, 4978252.0), 3857), 1, 'Ground Floor - Main Corridor Center-West', NOW(), NOW()),
+          ('corridor', 'corridor', ST_SetSRID(ST_MakePoint(-8235168.0, 4978252.0), 3857), 1, 'Ground Floor - Main Corridor Center', NOW(), NOW()),
+          ('corridor', 'corridor', ST_SetSRID(ST_MakePoint(-8235166.0, 4978252.0), 3857), 1, 'Ground Floor - Main Corridor Center-East', NOW(), NOW()),
+          ('corridor', 'corridor', ST_SetSRID(ST_MakePoint(-8235164.0, 4978252.0), 3857), 1, 'Ground Floor - Main Corridor East', NOW(), NOW()),
 
-        -- Junction nodes (Ground Floor)
-        ('junction', 'junction', ST_SetSRID(ST_MakePoint(-8235172.0, 4978254.0), 3857), 1, 'Ground Floor - West Junction', NOW(), NOW()),
-        ('junction', 'junction', ST_SetSRID(ST_MakePoint(-8235168.0, 4978254.0), 3857), 1, 'Ground Floor - Central Junction', NOW(), NOW()),
-        ('junction', 'junction', ST_SetSRID(ST_MakePoint(-8235164.0, 4978254.0), 3857), 1, 'Ground Floor - East Junction', NOW(), NOW())
-      ON CONFLICT DO NOTHING
-    `);
+          -- Upper corridor (Ground Floor)
+          ('corridor', 'corridor', ST_SetSRID(ST_MakePoint(-8235172.0, 4978256.0), 3857), 1, 'Ground Floor - Upper Corridor West', NOW(), NOW()),
+          ('corridor', 'corridor', ST_SetSRID(ST_MakePoint(-8235168.0, 4978256.0), 3857), 1, 'Ground Floor - Upper Corridor Center', NOW(), NOW()),
+          ('corridor', 'corridor', ST_SetSRID(ST_MakePoint(-8235164.0, 4978256.0), 3857), 1, 'Ground Floor - Upper Corridor East', NOW(), NOW()),
 
-    await queryRunner.query(`
-      INSERT INTO nodes (type, node_category, geometry, floor_id, description, created_at, updated_at)
-      VALUES
-        -- First Floor (floor_id = 2) Corridor Nodes
-        ('corridor', 'corridor', ST_SetSRID(ST_MakePoint(-8235172.0, 4978252.0), 3857), 2, 'First Floor - Main Corridor West', NOW(), NOW()),
-        ('corridor', 'corridor', ST_SetSRID(ST_MakePoint(-8235170.0, 4978252.0), 3857), 2, 'First Floor - Main Corridor Center-West', NOW(), NOW()),
-        ('corridor', 'corridor', ST_SetSRID(ST_MakePoint(-8235168.0, 4978252.0), 3857), 2, 'First Floor - Main Corridor Center', NOW(), NOW()),
-        ('corridor', 'corridor', ST_SetSRID(ST_MakePoint(-8235166.0, 4978252.0), 3857), 2, 'First Floor - Main Corridor Center-East', NOW(), NOW()),
-        ('corridor', 'corridor', ST_SetSRID(ST_MakePoint(-8235164.0, 4978252.0), 3857), 2, 'First Floor - Main Corridor East', NOW(), NOW()),
+          -- Junction nodes (Ground Floor)
+          ('junction', 'junction', ST_SetSRID(ST_MakePoint(-8235172.0, 4978254.0), 3857), 1, 'Ground Floor - West Junction', NOW(), NOW()),
+          ('junction', 'junction', ST_SetSRID(ST_MakePoint(-8235168.0, 4978254.0), 3857), 1, 'Ground Floor - Central Junction', NOW(), NOW()),
+          ('junction', 'junction', ST_SetSRID(ST_MakePoint(-8235164.0, 4978254.0), 3857), 1, 'Ground Floor - East Junction', NOW(), NOW())
+        ) AS t(type, node_category, geometry, floor_id, description, created_at, updated_at)
+        WHERE EXISTS (SELECT 1 FROM floor WHERE id = 1)
+        ON CONFLICT DO NOTHING
+      `);
 
-        -- Upper corridor (First Floor)
-        ('corridor', 'corridor', ST_SetSRID(ST_MakePoint(-8235172.0, 4978256.0), 3857), 2, 'First Floor - Upper Corridor West', NOW(), NOW()),
-        ('corridor', 'corridor', ST_SetSRID(ST_MakePoint(-8235168.0, 4978256.0), 3857), 2, 'First Floor - Upper Corridor Center', NOW(), NOW()),
-        ('corridor', 'corridor', ST_SetSRID(ST_MakePoint(-8235164.0, 4978256.0), 3857), 2, 'First Floor - Upper Corridor East', NOW(), NOW()),
+      await queryRunner.query(`
+        INSERT INTO nodes (type, node_category, geometry, floor_id, description, created_at, updated_at)
+        SELECT * FROM (VALUES
+          -- First Floor (floor_id = 2) Corridor Nodes
+          ('corridor', 'corridor', ST_SetSRID(ST_MakePoint(-8235172.0, 4978252.0), 3857), 2, 'First Floor - Main Corridor West', NOW(), NOW()),
+          ('corridor', 'corridor', ST_SetSRID(ST_MakePoint(-8235170.0, 4978252.0), 3857), 2, 'First Floor - Main Corridor Center-West', NOW(), NOW()),
+          ('corridor', 'corridor', ST_SetSRID(ST_MakePoint(-8235168.0, 4978252.0), 3857), 2, 'First Floor - Main Corridor Center', NOW(), NOW()),
+          ('corridor', 'corridor', ST_SetSRID(ST_MakePoint(-8235166.0, 4978252.0), 3857), 2, 'First Floor - Main Corridor Center-East', NOW(), NOW()),
+          ('corridor', 'corridor', ST_SetSRID(ST_MakePoint(-8235164.0, 4978252.0), 3857), 2, 'First Floor - Main Corridor East', NOW(), NOW()),
 
-        -- Junction nodes (First Floor)
-        ('junction', 'junction', ST_SetSRID(ST_MakePoint(-8235172.0, 4978254.0), 3857), 2, 'First Floor - West Junction', NOW(), NOW()),
-        ('junction', 'junction', ST_SetSRID(ST_MakePoint(-8235168.0, 4978254.0), 3857), 2, 'First Floor - Central Junction', NOW(), NOW()),
-        ('junction', 'junction', ST_SetSRID(ST_MakePoint(-8235164.0, 4978254.0), 3857), 2, 'First Floor - East Junction', NOW(), NOW())
-      ON CONFLICT DO NOTHING
-    `);
+          -- Upper corridor (First Floor)
+          ('corridor', 'corridor', ST_SetSRID(ST_MakePoint(-8235172.0, 4978256.0), 3857), 2, 'First Floor - Upper Corridor West', NOW(), NOW()),
+          ('corridor', 'corridor', ST_SetSRID(ST_MakePoint(-8235168.0, 4978256.0), 3857), 2, 'First Floor - Upper Corridor Center', NOW(), NOW()),
+          ('corridor', 'corridor', ST_SetSRID(ST_MakePoint(-8235164.0, 4978256.0), 3857), 2, 'First Floor - Upper Corridor East', NOW(), NOW()),
+
+          -- Junction nodes (First Floor)
+          ('junction', 'junction', ST_SetSRID(ST_MakePoint(-8235172.0, 4978254.0), 3857), 2, 'First Floor - West Junction', NOW(), NOW()),
+          ('junction', 'junction', ST_SetSRID(ST_MakePoint(-8235168.0, 4978254.0), 3857), 2, 'First Floor - Central Junction', NOW(), NOW()),
+          ('junction', 'junction', ST_SetSRID(ST_MakePoint(-8235164.0, 4978254.0), 3857), 2, 'First Floor - East Junction', NOW(), NOW())
+        ) AS t(type, node_category, geometry, floor_id, description, created_at, updated_at)
+        WHERE EXISTS (SELECT 1 FROM floor WHERE id = 2)
+        ON CONFLICT DO NOTHING
+      `);
+    }
 
     // ============================================================
     // PART 5: REBUILD EDGE TOPOLOGY

@@ -1,6 +1,10 @@
 // data-source.ts
 import { DataSource } from 'typeorm';
 import * as path from 'path';
+import * as dotenv from 'dotenv';
+
+// Load .env file for migrations
+dotenv.config();
 
 export default new DataSource({
   type: 'postgres',
