@@ -30,6 +30,9 @@ export class hazards {
   @Column()
   status: string;
 
+  @Column({ type: 'text', nullable: true })
+  description: string;
+
   @Column({ type: 'timestamp', default: () => 'CURRENT_TIMESTAMP' })
   created_at: Date;
 
@@ -39,4 +42,10 @@ export class hazards {
     onUpdate: 'CURRENT_TIMESTAMP',
   })
   updated_at: Date;
+
+  @Column({ type: 'timestamp', nullable: true })
+  responded_at: Date;
+
+  @Column({ type: 'timestamp', nullable: true })
+  resolved_at: Date;
 }

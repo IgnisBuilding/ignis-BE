@@ -20,7 +20,7 @@ export class HazardService {
 
   async findActive(): Promise<hazards[]> {
     return this.hazardRepository.find({
-      where: { status: In(['reported', 'responding', 'active']) },
+      where: { status: In(['ACTIVE', 'RESPONDED', 'RESPONDING', 'REPORTED']) },
       relations: ['apartment', 'apartment.floor', 'apartment.floor.building', 'node'],
       order: { created_at: 'DESC' },
     });
@@ -59,12 +59,14 @@ export class HazardService {
   async respond(id: number): Promise<hazards> {
     const hazard = await this.findOne(id);
     hazard.status = 'responding';
+    hazard.responded_at = new Date();
     return this.hazardRepository.save(hazard);
   }
 
   async resolve(id: number): Promise<hazards> {
     const hazard = await this.findOne(id);
     hazard.status = 'resolved';
+    hazard.resolved_at = new Date();
     return this.hazardRepository.save(hazard);
   }
 

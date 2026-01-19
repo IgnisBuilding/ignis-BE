@@ -14,10 +14,10 @@ export class building {
   @Column()
   address: string;
 
-  @Column({ type: 'geometry', spatialFeatureType: 'Polygon', srid: 3857 })
+  @Column({ type: 'geometry', spatialFeatureType: 'Polygon', srid: 3857, nullable: true })
   geometry: string;
 
-  @Column()
+  @Column({ nullable: true })
   society_id: number;
 
   @Column({ type: 'timestamp', default: () => 'CURRENT_TIMESTAMP' })
