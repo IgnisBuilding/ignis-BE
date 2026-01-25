@@ -39,6 +39,7 @@ import { isolation_events } from './entities/isolation_events.entity';
       username: process.env.DB_USER,
       password: process.env.DB_PASS,
       database: process.env.DB_NAME,
+      ssl: { rejectUnauthorized: false },
       entities: [
         Society,
         notification,

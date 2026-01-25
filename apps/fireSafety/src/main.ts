@@ -23,7 +23,8 @@ async function bootstrap() {
   }));
 
   // The port is defined here! Listen on all network interfaces
-  await app.listen(7000, '0.0.0.0');
-  console.log(`🔥 Fire Safety API is running on: http://0.0.0.0:7000`);
+  const port = process.env.PORT || 4000;
+  await app.listen(port, '0.0.0.0');
+  console.log(`🔥 Fire Safety API is running on: http://0.0.0.0:${port}`);
 }
 bootstrap();
