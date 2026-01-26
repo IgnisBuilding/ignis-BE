@@ -16,4 +16,7 @@ export * from './rescue_teams.entity';
 export * from './trapped_occupants.entity';
 export * from './isolation_events.entity';
 export * from './society.entity';
+export * from './camera.entity';
+export * from './fire_detection_log.entity';
+export * from './fire_alert_config.entity';
 export { Society } from './society.entity';

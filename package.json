@@ -32,7 +32,9 @@
     "@nestjs/jwt": "^11.0.2",
     "@nestjs/passport": "^11.0.5",
     "@nestjs/platform-express": "^11.1.7",
+    "@nestjs/platform-socket.io": "^11.1.12",
     "@nestjs/typeorm": "^11.0.0",
+    "@nestjs/websockets": "^11.1.12",
     "@supabase/supabase-js": "^2.76.1",
     "bcryptjs": "^3.0.3",
     "class-transformer": "^0.5.1",
@@ -96,7 +98,8 @@
     ],
     "moduleNameMapper": {
       "^@app/auth(|/.*)$": "<rootDir>/libs/auth/src/$1",
-      "^@app/database(|/.*)$": "<rootDir>/libs/database/src/$1"
+      "^@app/database(|/.*)$": "<rootDir>/libs/database/src/$1",
+      "^@app/entities(|/.*)$": "<rootDir>/libs/database/src/entities$1"
     }
   }
 }
