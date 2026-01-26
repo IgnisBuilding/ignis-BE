@@ -5,25 +5,28 @@ import { JwtModule } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
 import { FireSafetyController } from './fire_safety.controller';
 import { FireSafetyService } from './fire_safety.service';
-import { 
-  edges, 
-  EvacuationRoute, 
-  nodes, 
-  building, 
-  floor, 
-  apartment, 
-  room, 
-  exits, 
-  hazards, 
-  User, 
-  Sensor, 
-  Resident, 
-  Alert, 
+import {
+  edges,
+  EvacuationRoute,
+  nodes,
+  building,
+  floor,
+  apartment,
+  room,
+  exits,
+  hazards,
+  User,
+  Sensor,
+  Resident,
+  Alert,
   SafetyEquipment,
   rescue_teams,
   trapped_occupants,
   isolation_events,
-  Society
+  Society,
+  camera,
+  fire_detection_log,
+  fire_alert_config,
 } from '@app/entities';
 import { AuthController } from './controllers/auth.controller';
 import { SensorController } from './controllers/sensor.controller';
@@ -34,6 +37,8 @@ import { AlertController } from './controllers/alert.controller';
 import { HazardController } from './controllers/hazard.controller';
 import { SafetyEquipmentController } from './controllers/safety-equipment.controller';
 import { ApartmentController } from './controllers/apartment.controller';
+import { CameraController } from './controllers/camera.controller';
+import { FireDetectionController } from './controllers/fire-detection.controller';
 import { AuthService } from './services/auth.service';
 import { SensorService } from './services/sensor.service';
 import { ResidentService } from './services/resident.service';
@@ -41,8 +46,11 @@ import { AlertService } from './services/alert.service';
 import { HazardService } from './services/hazard.service';
 import { SafetyEquipmentService } from './services/safety-equipment.service';
 import { ApartmentService } from './services/apartment.service';
+import { CameraService } from './services/camera.service';
+import { FireDetectionService } from './services/fire-detection.service';
 import { IsolationDetectionService } from './isolation-detection.service';
 import { JwtStrategy } from './strategies/jwt.strategy';
+import { FireDetectionGateway } from './gateways/fire-detection.gateway';
 
 @Module({
   imports: [
@@ -75,6 +83,9 @@ import { JwtStrategy } from './strategies/jwt.strategy';
       trapped_occupants,
       isolation_events,
       Society,
+      camera,
+      fire_detection_log,
+      fire_alert_config,
     ]),
   ],
   controllers: [
@@ -88,6 +99,8 @@ import { JwtStrategy } from './strategies/jwt.strategy';
     HazardController,
     SafetyEquipmentController,
     ApartmentController,
+    CameraController,
+    FireDetectionController,
   ],
   providers: [
     FireSafetyService,
@@ -100,6 +113,9 @@ import { JwtStrategy } from './strategies/jwt.strategy';
     ApartmentService,
     IsolationDetectionService,
     JwtStrategy,
+    CameraService,
+    FireDetectionService,
+    FireDetectionGateway,
   ],
 })
 export class FireSafetyModule {}

@@ -26,6 +26,9 @@ import { Resident } from './entities/resident.entity';
 import { rescue_teams } from './entities/rescue_teams.entity';
 import { trapped_occupants } from './entities/trapped_occupants.entity';
 import { isolation_events } from './entities/isolation_events.entity';
+import { camera } from './entities/camera.entity';
+import { fire_detection_log } from './entities/fire_detection_log.entity';
+import { fire_alert_config } from './entities/fire_alert_config.entity';
 
 @Module({
   imports: [
@@ -65,6 +68,9 @@ import { isolation_events } from './entities/isolation_events.entity';
         rescue_teams,
         trapped_occupants,
         isolation_events,
+        camera,
+        fire_detection_log,
+        fire_alert_config,
       ],
       synchronize: false,
       logging: true,
