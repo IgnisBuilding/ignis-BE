@@ -27,10 +27,10 @@ export class apartment {
   floor: floor;
 
   @ManyToOne(() => User, (user) => user.apartments, { nullable: true })
-  @JoinColumn({ name: 'user_id' })
+  @JoinColumn({ name: 'owner_id' })
   user: User;
 
-  @Column({ name: 'user_id', nullable: true })
+  @Column({ name: 'owner_id', nullable: true })
   userId: number;
 
   @Column({ type: 'boolean', default: false })
