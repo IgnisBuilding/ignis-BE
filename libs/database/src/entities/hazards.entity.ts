@@ -7,6 +7,8 @@ import {
 } from 'typeorm';
 import { nodes } from './nodes.entity';
 import { apartment } from './apartment.entity';
+import { room } from './room.entity';
+import { floor } from './floor.entity';
 
 @Entity()
 export class hazards {
@@ -16,13 +18,33 @@ export class hazards {
   @Column()
   type: string;
 
-  @ManyToOne(() => apartment)
+  @ManyToOne(() => apartment, { nullable: true })
   @JoinColumn({ name: 'apartment_id' })
   apartment: apartment;
 
-  @ManyToOne(() => nodes)
+  @Column({ name: 'apartment_id', nullable: true })
+  apartmentId: number;
+
+  @ManyToOne(() => room, { nullable: true })
+  @JoinColumn({ name: 'room_id' })
+  room: room;
+
+  @Column({ name: 'room_id', nullable: true })
+  roomId: number;
+
+  @ManyToOne(() => floor, { nullable: true })
+  @JoinColumn({ name: 'floor_id' })
+  floor: floor;
+
+  @Column({ name: 'floor_id', nullable: true })
+  floorId: number;
+
+  @ManyToOne(() => nodes, { nullable: true })
   @JoinColumn({ name: 'node_id' })
   node: nodes;
+
+  @Column({ name: 'node_id', nullable: true })
+  nodeId: number;
 
   @Column()
   severity: string;

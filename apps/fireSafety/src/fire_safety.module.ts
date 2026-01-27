@@ -39,6 +39,7 @@ import { SafetyEquipmentController } from './controllers/safety-equipment.contro
 import { ApartmentController } from './controllers/apartment.controller';
 import { CameraController } from './controllers/camera.controller';
 import { FireDetectionController } from './controllers/fire-detection.controller';
+import { FloorController } from './controllers/floor.controller';
 import { AuthService } from './services/auth.service';
 import { SensorService } from './services/sensor.service';
 import { ResidentService } from './services/resident.service';
@@ -101,6 +102,7 @@ import { FireDetectionGateway } from './gateways/fire-detection.gateway';
     ApartmentController,
     CameraController,
     FireDetectionController,
+    FloorController,
   ],
   providers: [
     FireSafetyService,
