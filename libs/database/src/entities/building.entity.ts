@@ -20,6 +20,15 @@ export class building {
   @Column({ nullable: true })
   society_id: number;
 
+  @Column({ name: 'scale_pixels_per_meter', type: 'numeric', precision: 12, scale: 6, nullable: true })
+  scalePixelsPerMeter: number;
+
+  @Column({ name: 'center_lat', type: 'numeric', precision: 12, scale: 8, nullable: true })
+  centerLat: number;
+
+  @Column({ name: 'center_lng', type: 'numeric', precision: 12, scale: 8, nullable: true })
+  centerLng: number;
+
   @Column({ type: 'timestamp', default: () => 'CURRENT_TIMESTAMP' })
   created_at: Date;
 

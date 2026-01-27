@@ -1,5 +1,8 @@
 import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn, ManyToOne, JoinColumn } from 'typeorm';
 import { room } from './room.entity';
+import { floor } from './floor.entity';
+import { building } from './building.entity';
+import { nodes } from './nodes.entity';
 
 @Entity('sensors')
 export class Sensor {
@@ -28,11 +31,29 @@ export class Sensor {
     @JoinColumn({ name: 'room_id' })
     room: room;
 
-    @Column({ type: 'float', nullable: true })
-    latitude: number;
+    @Column({ name: 'floor_id', nullable: true })
+    floorId: number;
 
-    @Column({ type: 'float', nullable: true })
-    longitude: number;
+    @ManyToOne(() => floor, { nullable: true })
+    @JoinColumn({ name: 'floor_id' })
+    floor: floor;
+
+    @Column({ name: 'building_id', nullable: true })
+    buildingId: number;
+
+    @ManyToOne(() => building, { nullable: true })
+    @JoinColumn({ name: 'building_id' })
+    building: building;
+
+    @Column({ name: 'node_id', nullable: true })
+    nodeId: number;
+
+    @ManyToOne(() => nodes, { nullable: true })
+    @JoinColumn({ name: 'node_id' })
+    node: nodes;
+
+    @Column({ type: 'geometry', spatialFeatureType: 'Point', srid: 3857, nullable: true })
+    geometry: string;
 
     @CreateDateColumn({ name: 'created_at' })
     createdAt: Date;
