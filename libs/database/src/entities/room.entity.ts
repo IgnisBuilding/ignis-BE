@@ -33,6 +33,15 @@ export class room {
   @Column({ nullable: true })
   capacity: number;
 
+  @Column({ name: 'area_sqm', type: 'numeric', precision: 10, scale: 2, nullable: true })
+  areaSqm: number;
+
+  @Column({ nullable: true })
+  color: string;
+
+  @Column({ type: 'geometry', spatialFeatureType: 'Point', srid: 3857, nullable: true })
+  centroid: string;
+
   @Column({ type: 'timestamp', default: () => 'CURRENT_TIMESTAMP' })
   created_at: Date;
 

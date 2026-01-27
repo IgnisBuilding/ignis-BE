@@ -13,11 +13,11 @@ import {
   floor,
   apartment,
   room,
-  exits,
+  Opening,
+  OpeningRoom,
   hazards,
   User,
   Sensor,
-  Resident,
   Alert,
   SafetyEquipment,
   rescue_teams,
@@ -30,7 +30,7 @@ import {
 } from '@app/entities';
 import { AuthController } from './controllers/auth.controller';
 import { SensorController } from './controllers/sensor.controller';
-import { ResidentController } from './controllers/resident.controller';
+// ResidentController removed - residents merged into users
 import { BuildingController } from './controllers/building.controller';
 import { DashboardController } from './controllers/dashboard.controller';
 import { AlertController } from './controllers/alert.controller';
@@ -42,7 +42,7 @@ import { FireDetectionController } from './controllers/fire-detection.controller
 import { FloorController } from './controllers/floor.controller';
 import { AuthService } from './services/auth.service';
 import { SensorService } from './services/sensor.service';
-import { ResidentService } from './services/resident.service';
+// ResidentService removed - residents merged into users
 import { AlertService } from './services/alert.service';
 import { HazardService } from './services/hazard.service';
 import { SafetyEquipmentService } from './services/safety-equipment.service';
@@ -73,11 +73,11 @@ import { FireDetectionGateway } from './gateways/fire-detection.gateway';
       floor,
       apartment,
       room,
-      exits,
+      Opening,
+      OpeningRoom,
       hazards,
       User,
       Sensor,
-      Resident,
       Alert,
       SafetyEquipment,
       rescue_teams,
@@ -93,7 +93,6 @@ import { FireDetectionGateway } from './gateways/fire-detection.gateway';
     FireSafetyController,
     AuthController,
     SensorController,
-    ResidentController,
     BuildingController,
     DashboardController,
     AlertController,
@@ -108,7 +107,6 @@ import { FireDetectionGateway } from './gateways/fire-detection.gateway';
     FireSafetyService,
     AuthService,
     SensorService,
-    ResidentService,
     AlertService,
     HazardService,
     SafetyEquipmentService,

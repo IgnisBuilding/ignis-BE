@@ -62,15 +62,14 @@ export class ApartmentService {
   async findByUserId(userId: number): Promise<any> {
     const user = await this.userRepository.findOne({
       where: { id: userId },
-      relations: ['apartments', 'apartments.floor', 'apartments.floor.building'],
+      relations: ['apartment', 'apartment.floor', 'apartment.floor.building'],
     });
 
-    if (!user || !user.apartments || user.apartments.length === 0) {
+    if (!user || !user.apartment) {
       throw new NotFoundException('No apartment assigned to this user');
     }
 
-    // Return the first apartment for now
-    const apt = user.apartments[0];
+    const apt = user.apartment;
 
     return {
       id: apt.id,
