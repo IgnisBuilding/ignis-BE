@@ -30,6 +30,9 @@ export class room {
   @Column({ type: 'geometry', spatialFeatureType: 'Polygon', srid: 3857 })
   geometry: string;
 
+  @Column({ nullable: true })
+  capacity: number;
+
   @Column({ type: 'timestamp', default: () => 'CURRENT_TIMESTAMP' })
   created_at: Date;
 

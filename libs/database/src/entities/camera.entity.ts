@@ -8,6 +8,7 @@ import {
 import { building } from './building.entity';
 import { floor } from './floor.entity';
 import { room } from './room.entity';
+import { nodes } from './nodes.entity';
 
 @Entity()
 export class camera {
@@ -57,6 +58,13 @@ export class camera {
     nullable: true,
   })
   geometry: string; // Camera location on map
+
+  @Column({ name: 'node_id', nullable: true })
+  nodeId: number;
+
+  @ManyToOne(() => nodes, { nullable: true })
+  @JoinColumn({ name: 'node_id' })
+  node: nodes;
 
   @Column({ default: true })
   is_fire_detection_enabled: boolean;
