@@ -22,9 +22,9 @@ export class ApartmentService {
       [email]
     );
 
-    // Get all apartments with user_id
+    // Get all apartments with owner_id
     const apartmentsResult = await this.dataSource.query(
-      `SELECT a.id, a.unit_number, a.user_id, a.occupied, a.floor_id, f.level as floor_level, b.name as building_name
+      `SELECT a.id, a.unit_number, a.owner_id, a.occupied, a.floor_id, f.level as floor_level, b.name as building_name
        FROM apartment a
        LEFT JOIN floor f ON a.floor_id = f.id
        LEFT JOIN building b ON f.building_id = b.id`
@@ -33,8 +33,8 @@ export class ApartmentService {
     // Get apartments specifically for this user
     const userApartments = userResult.length > 0
       ? await this.dataSource.query(
-          `SELECT a.id, a.unit_number, a.user_id, a.occupied
-           FROM apartment a WHERE a.user_id = $1`,
+          `SELECT a.id, a.unit_number, a.owner_id, a.occupied
+           FROM apartment a WHERE a.owner_id = $1`,
           [userResult[0]?.id]
         )
       : [];
@@ -136,7 +136,7 @@ export class ApartmentService {
 
     // Update the apartment
     if (updateApartmentDto.userId !== undefined) {
-      apt.userId = updateApartmentDto.userId;
+      apt.ownerId = updateApartmentDto.userId;
     }
     if (updateApartmentDto.occupied !== undefined) {
       apt.occupied = updateApartmentDto.occupied;
@@ -165,7 +165,7 @@ export class ApartmentService {
       throw new NotFoundException(`User with ID ${assignDto.userId} not found`);
     }
 
-    apt.userId = assignDto.userId;
+    apt.ownerId = assignDto.userId;
     apt.occupied = true;
     await this.apartmentRepository.save(apt);
 

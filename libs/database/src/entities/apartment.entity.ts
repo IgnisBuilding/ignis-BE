@@ -25,12 +25,12 @@ export class apartment {
   @JoinColumn({ name: 'floor_id' })
   floor: floor;
 
-  @ManyToOne(() => User, (user) => user.apartments, { nullable: true })
+  @ManyToOne(() => User, (user) => user.ownedApartments, { nullable: true })
   @JoinColumn({ name: 'owner_id' })
-  user: User;
+  owner: User;
 
   @Column({ name: 'owner_id', nullable: true })
-  userId: number;
+  ownerId: number;
 
   @Column({ type: 'boolean', default: false })
   occupied: boolean;
