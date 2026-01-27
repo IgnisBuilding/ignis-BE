@@ -49,8 +49,7 @@ export class trapped_occupants {
   @Column({ length: 50 })
   isolation_reason: string;
 
-  @Column({ type: 'integer', array: true, nullable: true })
-  blocking_hazard_ids: number[];
+  // blocking_hazard_ids removed - use trapped_occupant_blocking_hazards junction table instead
 
   @Column({ type: 'decimal', precision: 10, scale: 2, nullable: true })
   nearest_fire_distance: number;
@@ -104,11 +103,4 @@ export class trapped_occupants {
 
   @Column({ type: 'timestamp', default: () => 'NOW()' })
   updated_at: Date;
-
-  // Coordinates for quick access (denormalized from node geometry)
-  @Column({ type: 'decimal', precision: 12, scale: 8, nullable: true })
-  longitude: number;
-
-  @Column({ type: 'decimal', precision: 12, scale: 8, nullable: true })
-  latitude: number;
 }

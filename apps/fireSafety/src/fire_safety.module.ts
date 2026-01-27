@@ -5,44 +5,53 @@ import { JwtModule } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
 import { FireSafetyController } from './fire_safety.controller';
 import { FireSafetyService } from './fire_safety.service';
-import { 
-  edges, 
-  EvacuationRoute, 
-  nodes, 
-  building, 
-  floor, 
-  apartment, 
-  room, 
-  exits, 
-  hazards, 
-  User, 
-  Sensor, 
-  Resident, 
-  Alert, 
+import {
+  edges,
+  EvacuationRoute,
+  nodes,
+  building,
+  floor,
+  apartment,
+  room,
+  Opening,
+  OpeningRoom,
+  hazards,
+  User,
+  Sensor,
+  Alert,
   SafetyEquipment,
   rescue_teams,
   trapped_occupants,
   isolation_events,
-  Society
+  Society,
+  camera,
+  fire_detection_log,
+  fire_alert_config,
 } from '@app/entities';
 import { AuthController } from './controllers/auth.controller';
 import { SensorController } from './controllers/sensor.controller';
-import { ResidentController } from './controllers/resident.controller';
+// ResidentController removed - residents merged into users
 import { BuildingController } from './controllers/building.controller';
 import { DashboardController } from './controllers/dashboard.controller';
 import { AlertController } from './controllers/alert.controller';
 import { HazardController } from './controllers/hazard.controller';
 import { SafetyEquipmentController } from './controllers/safety-equipment.controller';
 import { ApartmentController } from './controllers/apartment.controller';
+import { CameraController } from './controllers/camera.controller';
+import { FireDetectionController } from './controllers/fire-detection.controller';
+import { FloorController } from './controllers/floor.controller';
 import { AuthService } from './services/auth.service';
 import { SensorService } from './services/sensor.service';
-import { ResidentService } from './services/resident.service';
+// ResidentService removed - residents merged into users
 import { AlertService } from './services/alert.service';
 import { HazardService } from './services/hazard.service';
 import { SafetyEquipmentService } from './services/safety-equipment.service';
 import { ApartmentService } from './services/apartment.service';
+import { CameraService } from './services/camera.service';
+import { FireDetectionService } from './services/fire-detection.service';
 import { IsolationDetectionService } from './isolation-detection.service';
 import { JwtStrategy } from './strategies/jwt.strategy';
+import { FireDetectionGateway } from './gateways/fire-detection.gateway';
 
 @Module({
   imports: [
@@ -64,42 +73,49 @@ import { JwtStrategy } from './strategies/jwt.strategy';
       floor,
       apartment,
       room,
-      exits,
+      Opening,
+      OpeningRoom,
       hazards,
       User,
       Sensor,
-      Resident,
       Alert,
       SafetyEquipment,
       rescue_teams,
       trapped_occupants,
       isolation_events,
       Society,
+      camera,
+      fire_detection_log,
+      fire_alert_config,
     ]),
   ],
   controllers: [
     FireSafetyController,
     AuthController,
     SensorController,
-    ResidentController,
     BuildingController,
     DashboardController,
     AlertController,
     HazardController,
     SafetyEquipmentController,
     ApartmentController,
+    CameraController,
+    FireDetectionController,
+    FloorController,
   ],
   providers: [
     FireSafetyService,
     AuthService,
     SensorService,
-    ResidentService,
     AlertService,
     HazardService,
     SafetyEquipmentService,
     ApartmentService,
     IsolationDetectionService,
     JwtStrategy,
+    CameraService,
+    FireDetectionService,
+    FireDetectionGateway,
   ],
 })
 export class FireSafetyModule {}

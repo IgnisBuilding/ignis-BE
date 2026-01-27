@@ -149,13 +149,24 @@ export class FireSafetyController {
       : { type: 'FeatureCollection', features: [] };
   }
 
-  // Return building details composed from exits and evacuation routes
+  // Return building details composed from openings (doors, emergency exits, etc.)
   @Get('building-details')
   async getBuildingDetailsGeoJSON() {
-    // Return only exits - evacuation routes are computed on-demand, not pre-loaded
+    // Return openings - evacuation routes are computed on-demand, not pre-loaded
     const query = `
       SELECT json_build_object('type','FeatureCollection','features', COALESCE(json_agg(f), '[]'::json)) AS geojson FROM (
-        SELECT json_build_object('type','Feature','geometry', ST_AsGeoJSON(ST_Transform(e.geometry,4326))::json,'properties', json_build_object('id', e.id, 'feature_type','exit')) AS f FROM exits e
+        SELECT json_build_object(
+          'type','Feature',
+          'geometry', ST_AsGeoJSON(ST_Transform(o.geometry,4326))::json,
+          'properties', json_build_object(
+            'id', o.id,
+            'feature_type', o.opening_type,
+            'name', o.name,
+            'is_emergency_exit', o.is_emergency_exit,
+            'width_meters', o.width_meters,
+            'color', o.color
+          )
+        ) AS f FROM opening o
       ) t;
     `;
     const res = await this.dataSource.query(query);

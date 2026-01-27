@@ -9,7 +9,6 @@ import {
 import { floor } from './floor.entity';
 import { User } from './user.entity';
 import { room } from './room.entity';
-import { Resident } from './resident.entity';
 
 @Entity()
 export class apartment {
@@ -52,6 +51,7 @@ export class apartment {
   @OneToMany(() => room, (room) => room.apartment)
   rooms: room[];
 
-  @OneToMany(() => Resident, (resident) => resident.apartment)
-  residents: Resident[];
+  // Residents are now stored in users table with role='resident' and apartment_id FK
+  @OneToMany(() => User, (user) => user.apartment)
+  residents: User[];
 }
