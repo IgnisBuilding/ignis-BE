@@ -1,7 +1,7 @@
 import { Controller, Get, Post, Patch, Delete, UseGuards, Param, ParseIntPipe, Body } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource } from 'typeorm';
-import { building, floor, apartment, Society, room, nodes, edges, Opening, OpeningRoom } from '@app/entities';
+import { building, floor, apartment, Society, room, nodes, edges, Opening, OpeningRoom, camera } from '@app/entities';
 import { JwtAuthGuard } from '../guards/jwt-auth.guard';
 import { Public } from '../decorators/public.decorator';
 
@@ -18,6 +18,7 @@ export class BuildingController {
     @InjectRepository(edges) private edgesRepo: Repository<edges>,
     @InjectRepository(Opening) private openingRepo: Repository<Opening>,
     @InjectRepository(OpeningRoom) private openingRoomRepo: Repository<OpeningRoom>,
+    @InjectRepository(camera) private cameraRepo: Repository<camera>,
     private dataSource: DataSource,
   ) {}
 
@@ -38,10 +39,78 @@ export class BuildingController {
     return { totalBuildings, totalFloors, totalApartments };
   }
 
+  @Get('with-status')
+  @Public()
+  async findAllWithStatus() {
+    const buildings = await this.buildingRepo.find({
+      order: { created_at: 'DESC' },
+    });
+    return buildings.map(b => ({
+      id: b.id,
+      name: b.name,
+      address: b.address,
+      type: b.type,
+      total_floors: b.totalFloors || 1,
+      apartments_per_floor: b.apartmentsPerFloor || 1,
+      has_floor_plan: b.hasFloorPlan || false,
+      floor_plan_updated_at: b.floorPlanUpdatedAt,
+      created_at: b.created_at,
+    }));
+  }
+
   @Get(':id')
   @Public()
   findOne(@Param('id', ParseIntPipe) id: number) {
     return this.buildingRepo.findOne({ where: { id } });
+  }
+
+  @Get(':id/full')
+  @Public()
+  async getFullDetails(@Param('id', ParseIntPipe) buildingId: number) {
+    const buildingData = await this.buildingRepo.findOne({ where: { id: buildingId } });
+    if (!buildingData) {
+      return { error: 'Building not found' };
+    }
+
+    // Get floors with apartments
+    const floors = await this.floorRepo.find({
+      where: { building_id: buildingId },
+      order: { level: 'ASC' },
+    });
+
+    const floorsWithApartments = await Promise.all(
+      floors.map(async (floorData) => {
+        const apartments = await this.apartmentRepo.find({
+          where: { floor_id: floorData.id },
+          order: { unit_number: 'ASC' },
+        });
+        return {
+          id: floorData.id,
+          name: floorData.name,
+          level: floorData.level,
+          apartments: apartments.map(apt => ({
+            id: apt.id,
+            unit_number: apt.unit_number,
+            occupied: apt.occupied,
+          })),
+        };
+      })
+    );
+
+    return {
+      id: buildingData.id,
+      name: buildingData.name,
+      address: buildingData.address,
+      type: buildingData.type,
+      total_floors: buildingData.totalFloors || 1,
+      apartments_per_floor: buildingData.apartmentsPerFloor || 1,
+      has_floor_plan: buildingData.hasFloorPlan || false,
+      floor_plan_updated_at: buildingData.floorPlanUpdatedAt,
+      scale_pixels_per_meter: buildingData.scalePixelsPerMeter,
+      center_lat: buildingData.centerLat,
+      center_lng: buildingData.centerLng,
+      floors: floorsWithApartments,
+    };
   }
 
   @Get(':id/floors')
@@ -160,6 +229,19 @@ export class BuildingController {
       WHERE n.floor_id = ANY($1)
     `, [floorIds]);
 
+    // Get cameras with geometry as GeoJSON
+    const camerasRaw = await this.dataSource.query(`
+      SELECT
+        c.id, c.name, c.camera_id, c.rtsp_url, c.status, c.location_description,
+        c.is_fire_detection_enabled, c.floor_id, c.room_id,
+        f.level as floor_level,
+        ST_AsGeoJSON(ST_Transform(c.geometry, 4326))::json as geometry
+      FROM camera c
+      JOIN floor f ON c.floor_id = f.id
+      WHERE c.floor_id = ANY($1)
+      ORDER BY f.level, c.name
+    `, [floorIds]);
+
     // Build GeoJSON FeatureCollection
     const features = [];
 
@@ -254,6 +336,31 @@ export class BuildingController {
       }
     }
 
+    // Add cameras as Point features
+    for (const c of camerasRaw) {
+      if (c.geometry) {
+        features.push({
+          type: 'Feature',
+          properties: {
+            id: String(c.id),
+            db_id: c.id,
+            type: 'camera',
+            is_camera: true,
+            name: c.name,
+            camera_id: c.camera_id,
+            rtsp_url: c.rtsp_url,
+            status: c.status,
+            location_description: c.location_description,
+            is_fire_detection_enabled: c.is_fire_detection_enabled,
+            level: String(c.floor_level),
+            floor_id: c.floor_id,
+            room_id: c.room_id,
+          },
+          geometry: c.geometry,
+        });
+      }
+    }
+
     return {
       type: 'FeatureCollection',
       properties: {
@@ -304,6 +411,7 @@ export class BuildingController {
       opening_room_connections: 0,
       nodes: 0,
       edges: 0,
+      cameras: 0,
     };
     const warnings: string[] = [];
     const floorMap: Record<string, number> = {}; // level -> floor_id
@@ -353,6 +461,34 @@ export class BuildingController {
       // Step 2: Clear existing data for this building's floors (to allow re-import)
       const existingFloorIds = Object.values(floorMap);
       if (existingFloorIds.length > 0) {
+        // Delete trapped_occupants first (they depend on nodes)
+        await queryRunner.query(`
+          DELETE FROM trapped_occupants WHERE node_id IN (
+            SELECT id FROM nodes WHERE floor_id = ANY($1)
+          )
+        `, [existingFloorIds]);
+
+        // Delete evacuation routes (they depend on nodes)
+        await queryRunner.query(`
+          DELETE FROM evacuation_route WHERE start_node_id IN (
+            SELECT id FROM nodes WHERE floor_id = ANY($1)
+          ) OR end_node_id IN (
+            SELECT id FROM nodes WHERE floor_id = ANY($1)
+          )
+        `, [existingFloorIds]);
+
+        // Delete existing edges (they depend on nodes via source_id and target_id)
+        await queryRunner.query(`
+          DELETE FROM edges WHERE source_id IN (
+            SELECT id FROM nodes WHERE floor_id = ANY($1)
+          ) OR target_id IN (
+            SELECT id FROM nodes WHERE floor_id = ANY($1)
+          )
+        `, [existingFloorIds]);
+
+        // Delete existing nodes for these floors
+        await queryRunner.query(`DELETE FROM nodes WHERE floor_id = ANY($1)`, [existingFloorIds]);
+
         // Delete existing openings and their room connections for these floors
         await queryRunner.query(`
           DELETE FROM opening_rooms WHERE opening_id IN (
@@ -363,6 +499,10 @@ export class BuildingController {
 
         // Delete existing rooms for these floors
         await queryRunner.query(`DELETE FROM room WHERE floor_id = ANY($1)`, [existingFloorIds]);
+
+        // Delete existing cameras for these floors
+        const deletedCameras = await queryRunner.query(`DELETE FROM camera WHERE floor_id = ANY($1) RETURNING id`, [existingFloorIds]);
+        console.log(`[ImportFloorPlan] Deleted ${deletedCameras?.length || 0} existing cameras for floors:`, existingFloorIds);
       }
 
       // Step 3: First pass - import rooms (need to process before openings for room connections)
@@ -572,13 +712,248 @@ export class BuildingController {
         }
       }
 
+      // Step 5: Third pass - import nodes (routing graph vertices)
+      const nodeMap: Record<string, number> = {}; // geojson_id -> db_id
+      for (const feature of geojson.features) {
+        const props = feature.properties;
+        const geom = feature.geometry;
+
+        if (!geom || !geom.coordinates) continue;
+
+        // Only process nodes (accept both props.type and props.feature_type)
+        const featureType = props.type || props.feature_type;
+        if (featureType !== 'node') continue;
+
+        // Get feature ID (from feature.id or props.id)
+        const featureId = (feature as any).id || props.id;
+
+        const level = props.level || '1';
+        const floorId = floorMap[level];
+
+        if (!floorId) {
+          warnings.push(`Skipping node ${featureId}: floor level ${level} not found`);
+          continue;
+        }
+
+        const geomJson = JSON.stringify(geom);
+
+        try {
+          // Resolve room_id from roomMap if provided
+          const roomDbId = props.room_id ? roomMap[props.room_id] || null : null;
+
+          // Map node_type to allowed database values
+          // Allowed: room, corridor, staircase, elevator, exit, entrance, junction, door, window, other
+          const nodeTypeMap: Record<string, string> = {
+            'room_centroid': 'room',
+            'centroid': 'room',
+            'opening_midpoint': 'door',
+            'door': 'door',
+            'waypoint': 'junction',
+            'junction': 'junction',
+            'exit': 'exit',
+            'entrance': 'entrance',
+            'staircase': 'staircase',
+            'elevator': 'elevator',
+            'corridor': 'corridor',
+            'window': 'window',
+          };
+          const nodeType = nodeTypeMap[props.node_type] || 'other';
+
+          const nodeResult = await queryRunner.query(`
+            INSERT INTO nodes (
+              floor_id, room_id, type, node_category, is_accessible, description, geometry,
+              created_at, updated_at
+            )
+            VALUES (
+              $1, $2, $3, $4, $5, $6,
+              ST_Transform(ST_SetSRID(ST_GeomFromGeoJSON($7), 4326), 3857),
+              NOW(), NOW()
+            )
+            RETURNING id
+          `, [
+            floorId,
+            roomDbId,
+            nodeType,
+            props.node_category || null,
+            props.is_accessible !== false, // default true
+            props.description || null,
+            geomJson,
+          ]);
+
+          // Store mapping of geojson id to database id
+          if (featureId) {
+            nodeMap[featureId] = nodeResult[0].id;
+          }
+          imported.nodes++;
+        } catch (err) {
+          warnings.push(`Failed to import node ${featureId}: ${err.message}`);
+        }
+      }
+
+      // Step 6: Fourth pass - import edges (routing graph connections)
+      for (const feature of geojson.features) {
+        const props = feature.properties;
+        const geom = feature.geometry;
+        const edgeFeatureId = (feature as any).id || props.id;
+
+        if (!geom || !geom.coordinates) continue;
+
+        // Only process edges (accept both props.type and props.feature_type)
+        const edgeType = props.type || props.feature_type;
+        if (edgeType !== 'edge') continue;
+
+        const geomJson = JSON.stringify(geom);
+
+        try {
+          // Resolve source and target node IDs from nodeMap
+          // Accept both props.source/props.target and props.source_id/props.target_id
+          const sourceNodeId = props.source_id || props.source;
+          const targetNodeId = props.target_id || props.target;
+          const sourceDbId = nodeMap[sourceNodeId];
+          const targetDbId = nodeMap[targetNodeId];
+
+          if (!sourceDbId) {
+            warnings.push(`Edge ${edgeFeatureId}: source node ${sourceNodeId} not found in imported nodes`);
+            continue;
+          }
+          if (!targetDbId) {
+            warnings.push(`Edge ${edgeFeatureId}: target node ${targetNodeId} not found in imported nodes`);
+            continue;
+          }
+
+          // Map edge_type to allowed database values
+          // Allowed: corridor, door, staircase, elevator, ramp, ladder, emergency_exit, other
+          const edgeTypeMap: Record<string, string> = {
+            'room_to_door': 'door',
+            'door_to_corridor': 'corridor',
+            'door_to_room': 'door',
+            'corridor': 'corridor',
+            'door': 'door',
+            'staircase': 'staircase',
+            'stairs': 'staircase',
+            'elevator': 'elevator',
+            'ramp': 'ramp',
+            'ladder': 'ladder',
+            'emergency_exit': 'emergency_exit',
+            'exit': 'emergency_exit',
+          };
+          const mappedEdgeType = edgeTypeMap[props.edge_type] || 'other';
+
+          await queryRunner.query(`
+            INSERT INTO edges (
+              source_id, target_id, edge_type, cost, is_emergency_route, width_meters, geometry,
+              created_at, updated_at
+            )
+            VALUES (
+              $1, $2, $3, $4, $5, $6,
+              ST_Transform(ST_SetSRID(ST_GeomFromGeoJSON($7), 4326), 3857),
+              NOW(), NOW()
+            )
+          `, [
+            sourceDbId,
+            targetDbId,
+            mappedEdgeType,
+            Math.round(props.cost || 1),  // Cast to integer for database
+            props.is_emergency_route === true,
+            props.width_meters || null,
+            geomJson,
+          ]);
+
+          imported.edges++;
+        } catch (err) {
+          warnings.push(`Failed to import edge ${edgeFeatureId}: ${err.message}`);
+        }
+      }
+
+      // Step 7: Fifth pass - import cameras
+      const cameraFeatures = geojson.features.filter(f =>
+        f.properties?.type === 'camera' || f.properties?.is_camera
+      );
+      console.log(`[ImportFloorPlan] Found ${cameraFeatures.length} camera features to import`);
+      console.log(`[ImportFloorPlan] FloorMap keys:`, Object.keys(floorMap));
+
+      for (const feature of geojson.features) {
+        const props = feature.properties;
+        const geom = feature.geometry;
+
+        if (!geom || !geom.coordinates) continue;
+
+        // Only process cameras
+        if (!(props.type === 'camera' || props.is_camera)) {
+          continue;
+        }
+
+        console.log(`[ImportFloorPlan] Processing camera: ${props.name || props.id}, level: "${props.level}", floorMap has this level: ${floorMap[props.level] !== undefined}`);
+
+        const level = props.level || '1';
+        const floorId = floorMap[level];
+
+        if (!floorId) {
+          warnings.push(`Skipping camera ${props.id}: floor level ${level} not found`);
+          continue;
+        }
+
+        const geomJson = JSON.stringify(geom);
+
+        try {
+          // Resolve linked room_id if provided
+          const linkedRoomDbId = props.linked_room_id ? roomMap[props.linked_room_id] || null : null;
+
+          // Generate unique camera_id - include building ID and timestamp for uniqueness
+          const timestamp = Date.now();
+          const cameraId = props.camera_id
+            ? `B${buildingId}_${props.camera_id}`
+            : `B${buildingId}_CAM${String(imported.cameras + 1).padStart(3, '0')}_${timestamp}`;
+
+          console.log(`[ImportFloorPlan] Inserting camera with ID: ${cameraId}, floorId: ${floorId}`);
+
+          await queryRunner.query(`
+            INSERT INTO camera (
+              name, camera_id, rtsp_url, building_id, floor_id, room_id,
+              status, location_description, is_fire_detection_enabled,
+              geometry, created_at, updated_at
+            )
+            VALUES (
+              $1, $2, $3, $4, $5, $6, $7, $8, $9,
+              ST_Transform(ST_SetSRID(ST_GeomFromGeoJSON($10), 4326), 3857),
+              NOW(), NOW()
+            )
+          `, [
+            props.name || `Camera ${imported.cameras + 1}`,
+            cameraId,
+            props.rtsp_url || '',
+            buildingId,
+            floorId,
+            linkedRoomDbId,
+            'active',
+            props.location_description || null,
+            props.is_fire_detection_enabled !== false,
+            geomJson,
+          ]);
+
+          imported.cameras++;
+          console.log(`[ImportFloorPlan] Successfully imported camera: ${cameraId}`);
+        } catch (err) {
+          console.error(`[ImportFloorPlan] Failed to import camera ${props.id}:`, err.message);
+          warnings.push(`Failed to import camera ${props.id}: ${err.message}`);
+        }
+      }
+
+      console.log(`[ImportFloorPlan] Total cameras imported: ${imported.cameras}`);
+
+      // Mark building as having a floor plan
+      await queryRunner.manager.update('building', buildingId, {
+        hasFloorPlan: true,
+        floorPlanUpdatedAt: new Date(),
+      });
+
       await queryRunner.commitTransaction();
 
       return {
         success: true,
         imported,
         warnings: warnings.length > 0 ? warnings : undefined,
-        message: `Imported ${imported.rooms} rooms, ${imported.openings} openings (${imported.opening_room_connections} room connections), ${imported.floors} floors`,
+        message: `Imported ${imported.rooms} rooms, ${imported.openings} openings (${imported.opening_room_connections} room connections), ${imported.nodes} nodes, ${imported.edges} edges, ${imported.cameras} cameras, ${imported.floors} floors`,
       };
     } catch (error) {
       await queryRunner.rollbackTransaction();
@@ -594,20 +969,70 @@ export class BuildingController {
 
   @Post()
   @Public()
-  async create(@Body() createDto: { 
-    name: string; 
-    address: string; 
+  async create(@Body() createDto: {
+    name: string;
+    address: string;
     type?: string;
     society_id?: number;
+    total_floors?: number;
+    apartments_per_floor?: number;
   }) {
-    const newBuilding = this.buildingRepo.create({
-      name: createDto.name,
-      address: createDto.address,
-      type: createDto.type || 'residential',
-      society_id: createDto.society_id || 1, // Default to society ID 1
-      geometry: null, // Set geometry to null explicitly
-    });
-    return this.buildingRepo.save(newBuilding);
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+
+    try {
+      const totalFloors = createDto.total_floors || 1;
+      const apartmentsPerFloor = createDto.apartments_per_floor || 1;
+
+      // Step 1: Create building with configuration
+      const newBuilding = this.buildingRepo.create({
+        name: createDto.name,
+        address: createDto.address,
+        type: createDto.type || 'residential',
+        society_id: createDto.society_id || 1,
+        geometry: null,
+        totalFloors: totalFloors,
+        apartmentsPerFloor: apartmentsPerFloor,
+        hasFloorPlan: false,
+      });
+      const savedBuilding = await queryRunner.manager.save(newBuilding);
+
+      // Step 2: Create floors (without geometry - set during map import)
+      for (let level = 1; level <= totalFloors; level++) {
+        const floorRecord = this.floorRepo.create({
+          name: `Floor ${level}`,
+          level: level,
+          building_id: savedBuilding.id,
+          geometry: null,
+        });
+        const savedFloor = await queryRunner.manager.save(floorRecord);
+
+        // Step 3: Create apartments for this floor
+        for (let apt = 1; apt <= apartmentsPerFloor; apt++) {
+          const unitNumber = `${level}${String(apt).padStart(2, '0')}`; // "101", "102"
+          const apartmentRecord = this.apartmentRepo.create({
+            unit_number: unitNumber,
+            floor_id: savedFloor.id,
+            occupied: false,
+          });
+          await queryRunner.manager.save(apartmentRecord);
+        }
+      }
+
+      await queryRunner.commitTransaction();
+
+      return {
+        ...savedBuilding,
+        floors_created: totalFloors,
+        apartments_created: totalFloors * apartmentsPerFloor,
+      };
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      throw error;
+    } finally {
+      await queryRunner.release();
+    }
   }
 
   @Patch(':id')
