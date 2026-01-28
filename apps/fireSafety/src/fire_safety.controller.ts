@@ -181,9 +181,28 @@ export class FireSafetyController {
     // Try to join sensors to nodes to get their geometry. If DB schema differs, return safe empty FeatureCollection.
     try {
       const query = `
-        SELECT json_build_object('type','FeatureCollection','features', COALESCE(json_agg(json_build_object('type','Feature','geometry', ST_AsGeoJSON(ST_Transform(n.geometry,4326))::json,'properties', json_build_object('id', s.id, 'type', s.type, 'location', s.location_description))), '[]'::json)) AS geojson
-        FROM sensor s
-        LEFT JOIN nodes n ON n.id = s.appartment_id OR n.id = s.floor_id OR n.id = s.building_id;
+        SELECT json_build_object(
+          'type', 'FeatureCollection',
+          'features', COALESCE(json_agg(
+            json_build_object(
+              'type', 'Feature',
+              'geometry', COALESCE(
+                ST_AsGeoJSON(ST_Transform(s.geometry, 4326))::json,
+                ST_AsGeoJSON(ST_Transform(n.geometry, 4326))::json
+              ),
+              'properties', json_build_object(
+                'id', s.id,
+                'type', s.type,
+                'name', s.name,
+                'status', s.status,
+                'value', s.value,
+                'unit', s.unit
+              )
+            )
+          ) FILTER (WHERE s.id IS NOT NULL), '[]'::json)
+        ) AS geojson
+        FROM sensors s
+        LEFT JOIN nodes n ON n.id = s.node_id;
       `;
       const res = await this.dataSource.query(query);
       return res && res[0]

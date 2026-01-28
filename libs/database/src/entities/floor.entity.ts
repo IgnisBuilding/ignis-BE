@@ -20,7 +20,7 @@ export class floor {
   @JoinColumn({ name: 'building_id' })
   building: building;
 
-  @Column({ type: 'geometry', spatialFeatureType: 'Polygon', srid: 3857 })
+  @Column({ type: 'geometry', spatialFeatureType: 'Polygon', srid: 3857, nullable: true })
   geometry: string;
 
   @Column({ type: 'timestamp', default: () => 'CURRENT_TIMESTAMP' })

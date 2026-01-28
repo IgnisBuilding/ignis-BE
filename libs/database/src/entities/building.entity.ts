@@ -29,6 +29,18 @@ export class building {
   @Column({ name: 'center_lng', type: 'numeric', precision: 12, scale: 8, nullable: true })
   centerLng: number;
 
+  @Column({ name: 'total_floors', nullable: true, default: 1 })
+  totalFloors: number;
+
+  @Column({ name: 'apartments_per_floor', nullable: true, default: 1 })
+  apartmentsPerFloor: number;
+
+  @Column({ name: 'has_floor_plan', nullable: true, default: false })
+  hasFloorPlan: boolean;
+
+  @Column({ name: 'floor_plan_updated_at', type: 'timestamp', nullable: true })
+  floorPlanUpdatedAt: Date;
+
   @Column({ type: 'timestamp', default: () => 'CURRENT_TIMESTAMP' })
   created_at: Date;
 

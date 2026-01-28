@@ -35,7 +35,7 @@ export class apartment {
   @Column({ type: 'boolean', default: false })
   occupied: boolean;
 
-  @Column({ type: 'geometry', spatialFeatureType: 'Polygon', srid: 3857 })
+  @Column({ type: 'geometry', spatialFeatureType: 'Polygon', srid: 3857, nullable: true })
   geometry: string;
 
   @Column({ type: 'timestamp', default: () => 'CURRENT_TIMESTAMP' })
