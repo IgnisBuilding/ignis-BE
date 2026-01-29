@@ -55,6 +55,9 @@ export class Opening {
   @OneToMany(() => OpeningRoom, (openingRoom) => openingRoom.opening)
   openingRooms: OpeningRoom[];
 
+  @Column({ name: 'external_id', nullable: true })
+  externalId: string;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 
