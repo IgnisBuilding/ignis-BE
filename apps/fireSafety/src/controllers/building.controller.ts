@@ -373,6 +373,31 @@ export class BuildingController {
         generated_at: new Date().toISOString(),
       },
       features,
+      // Include floor plan image and editor state for restoration
+      floorPlanImage: buildingData.floorPlanImage || null,
+      editorState: buildingData.editorState || null,
+    };
+  }
+
+  // Get just the editor state (lighter endpoint for loading)
+  @Get(':id/editor-state')
+  @Public()
+  async getEditorState(@Param('id', ParseIntPipe) buildingId: number) {
+    const buildingData = await this.buildingRepo.findOne({ where: { id: buildingId } });
+    if (!buildingData) {
+      return { error: 'Building not found' };
+    }
+
+    return {
+      buildingId,
+      buildingName: buildingData.name,
+      hasFloorPlan: buildingData.hasFloorPlan,
+      floorPlanUpdatedAt: buildingData.floorPlanUpdatedAt,
+      centerLat: buildingData.centerLat ? parseFloat(String(buildingData.centerLat)) : null,
+      centerLng: buildingData.centerLng ? parseFloat(String(buildingData.centerLng)) : null,
+      scalePixelsPerMeter: buildingData.scalePixelsPerMeter ? parseFloat(String(buildingData.scalePixelsPerMeter)) : null,
+      floorPlanImage: buildingData.floorPlanImage || null,
+      editorState: buildingData.editorState || null,
     };
   }
 
@@ -380,25 +405,33 @@ export class BuildingController {
   @Public()
   async importFloorPlan(
     @Param('id', ParseIntPipe) buildingId: number,
-    @Body() geojson: {
-      type: string;
-      properties?: {
-        building_name?: string;
-        levels?: string[];
-        scale_pixels_per_meter?: number;
-        center_lat?: number;
-        center_lng?: number;
-      };
-      features: Array<{
+    @Body() body: {
+      geojson: {
         type: string;
-        properties: Record<string, any>;
-        geometry: {
-          type: string;
-          coordinates: any;
+        properties?: {
+          building_name?: string;
+          levels?: string[];
+          scale_pixels_per_meter?: number;
+          center_lat?: number;
+          center_lng?: number;
         };
-      }>;
+        features: Array<{
+          type: string;
+          properties: Record<string, any>;
+          geometry: {
+            type: string;
+            coordinates: any;
+          };
+        }>;
+      };
+      floorPlanImage?: string; // Base64 encoded image
+      editorState?: any; // Complete editor state for restoration
     },
   ) {
+    // Support both old format (direct geojson) and new format (with image and editorState)
+    const geojson = body.geojson || (body as any);
+    const floorPlanImage = body.floorPlanImage;
+    const editorState = body.editorState;
     const buildingData = await this.buildingRepo.findOne({ where: { id: buildingId } });
     if (!buildingData) {
       return { success: false, error: 'Building not found' };
@@ -941,11 +974,25 @@ export class BuildingController {
 
       console.log(`[ImportFloorPlan] Total cameras imported: ${imported.cameras}`);
 
-      // Mark building as having a floor plan
-      await queryRunner.manager.update('building', buildingId, {
+      // Mark building as having a floor plan and save image/editor state
+      const buildingUpdates: any = {
         hasFloorPlan: true,
         floorPlanUpdatedAt: new Date(),
-      });
+      };
+
+      // Save floor plan image if provided (Base64 encoded)
+      if (floorPlanImage) {
+        buildingUpdates.floorPlanImage = floorPlanImage;
+        console.log(`[ImportFloorPlan] Saving floor plan image (${Math.round(floorPlanImage.length / 1024)}KB)`);
+      }
+
+      // Save editor state if provided (for complete restoration)
+      if (editorState) {
+        buildingUpdates.editorState = editorState;
+        console.log(`[ImportFloorPlan] Saving editor state`);
+      }
+
+      await queryRunner.manager.update('building', buildingId, buildingUpdates);
 
       await queryRunner.commitTransaction();
 
