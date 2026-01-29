@@ -69,6 +69,9 @@ export class camera {
   @Column({ default: true })
   is_fire_detection_enabled: boolean;
 
+  @Column({ name: 'external_id', nullable: true })
+  external_id: string;
+
   @Column({ type: 'timestamp', default: () => 'CURRENT_TIMESTAMP' })
   created_at: Date;
 

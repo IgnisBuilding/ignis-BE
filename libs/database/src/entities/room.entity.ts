@@ -42,6 +42,9 @@ export class room {
   @Column({ type: 'geometry', spatialFeatureType: 'Point', srid: 3857, nullable: true })
   centroid: string;
 
+  @Column({ name: 'external_id', nullable: true })
+  externalId: string;
+
   @Column({ type: 'timestamp', default: () => 'CURRENT_TIMESTAMP' })
   created_at: Date;
 
