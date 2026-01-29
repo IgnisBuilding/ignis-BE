@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, Logger, Inject, forwardRef } from '@nestjs/common';
+import { Injectable, NotFoundException, Logger, Inject, forwardRef, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, MoreThan } from 'typeorm';
 import { camera, fire_detection_log, fire_alert_config, hazards } from '@app/entities';
@@ -11,11 +11,16 @@ import {
 import { FireDetectionGateway } from '../gateways/fire-detection.gateway';
 
 @Injectable()
-export class FireDetectionService {
+export class FireDetectionService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(FireDetectionService.name);
 
   // In-memory cache for consecutive detection tracking
   private consecutiveDetections: Map<string, { count: number; lastTimestamp: number }> = new Map();
+
+  // Cache cleanup interval (runs every 60 seconds)
+  private cacheCleanupInterval: NodeJS.Timeout | null = null;
+  private readonly CACHE_CLEANUP_INTERVAL_MS = 60000; // 1 minute
+  private readonly CACHE_ENTRY_TTL_SECONDS = 300; // 5 minutes
 
   constructor(
     @InjectRepository(camera)
@@ -29,6 +34,60 @@ export class FireDetectionService {
     @Inject(forwardRef(() => FireDetectionGateway))
     private readonly fireDetectionGateway: FireDetectionGateway,
   ) {}
+
+  /**
+   * Lifecycle hook - start cache cleanup interval on module init
+   */
+  onModuleInit() {
+    this.startCacheCleanup();
+    this.logger.log('FireDetectionService initialized with cache cleanup interval');
+  }
+
+  /**
+   * Lifecycle hook - stop cache cleanup interval on module destroy
+   */
+  onModuleDestroy() {
+    this.stopCacheCleanup();
+    this.logger.log('FireDetectionService destroyed, cache cleanup stopped');
+  }
+
+  /**
+   * Start periodic cache cleanup to remove stale entries
+   */
+  private startCacheCleanup() {
+    this.cacheCleanupInterval = setInterval(() => {
+      this.cleanupStaleEntries();
+    }, this.CACHE_CLEANUP_INTERVAL_MS);
+  }
+
+  /**
+   * Stop the cache cleanup interval
+   */
+  private stopCacheCleanup() {
+    if (this.cacheCleanupInterval) {
+      clearInterval(this.cacheCleanupInterval);
+      this.cacheCleanupInterval = null;
+    }
+  }
+
+  /**
+   * Remove stale entries from consecutive detections cache
+   */
+  private cleanupStaleEntries() {
+    const now = Date.now() / 1000; // Current time in seconds
+    let cleanedCount = 0;
+
+    for (const [key, value] of this.consecutiveDetections) {
+      if (now - value.lastTimestamp > this.CACHE_ENTRY_TTL_SECONDS) {
+        this.consecutiveDetections.delete(key);
+        cleanedCount++;
+      }
+    }
+
+    if (cleanedCount > 0) {
+      this.logger.debug(`Cleaned up ${cleanedCount} stale cache entries`);
+    }
+  }
 
   /**
    * Process fire detection alert from fire-detect pipeline
@@ -238,7 +297,7 @@ export class FireDetectionService {
   }
 
   /**
-   * Create a fire hazard
+   * Create a fire hazard with location data from camera
    */
   private async createFireHazard(cam: camera, confidence: number): Promise<hazards> {
     const severity = confidence >= 0.9 ? 'critical' : confidence >= 0.8 ? 'high' : 'medium';
@@ -248,6 +307,10 @@ export class FireDetectionService {
       severity: severity,
       status: 'active',
       description: `Fire detected by camera ${cam.name} (${cam.camera_id}) with ${(confidence * 100).toFixed(1)}% confidence`,
+      // Include location data from camera for evacuation routing
+      roomId: cam.room_id ?? undefined,
+      floorId: cam.floor_id ?? undefined,
+      nodeId: cam.nodeId ?? undefined,
     });
 
     return this.hazardRepository.save(hazard);
