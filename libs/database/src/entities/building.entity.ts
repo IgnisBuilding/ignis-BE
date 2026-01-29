@@ -41,6 +41,12 @@ export class building {
   @Column({ name: 'floor_plan_updated_at', type: 'timestamp', nullable: true })
   floorPlanUpdatedAt: Date;
 
+  @Column({ name: 'floor_plan_image', type: 'text', nullable: true })
+  floorPlanImage: string; // Base64 encoded floor plan image
+
+  @Column({ name: 'editor_state', type: 'jsonb', nullable: true })
+  editorState: any; // Complete editor state (rooms, openings, cameras, calibration, etc.)
+
   @Column({ type: 'timestamp', default: () => 'CURRENT_TIMESTAMP' })
   created_at: Date;
 
