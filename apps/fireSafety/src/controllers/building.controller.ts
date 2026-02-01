@@ -1,9 +1,27 @@
-import { Controller, Get, Post, Patch, Delete, UseGuards, Param, ParseIntPipe, Body } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Delete, UseGuards, Param, ParseIntPipe, Body, Req } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource } from 'typeorm';
-import { building, floor, apartment, Society, room, nodes, edges, Opening, OpeningRoom, camera } from '@app/entities';
+import { building, floor, apartment, Society, room, nodes, edges, Opening, OpeningRoom, camera, User } from '@app/entities';
 import { JwtAuthGuard } from '../guards/jwt-auth.guard';
 import { Public } from '../decorators/public.decorator';
+import { Request } from 'express';
+import * as bcrypt from 'bcryptjs';
+
+// Helper function to generate email from name
+function generateEmail(name: string, type: 'hq' | 'state' | 'station'): string {
+  const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
+  return `${slug}.${type}@ignis.com`;
+}
+
+// Helper function to generate random password
+function generatePassword(): string {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789';
+  let password = '';
+  for (let i = 0; i < 10; i++) {
+    password += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return password;
+}
 
 @Controller('buildings')
 @UseGuards(JwtAuthGuard)
@@ -39,6 +57,145 @@ export class BuildingController {
     return { totalBuildings, totalFloors, totalApartments };
   }
 
+  // Get all societies with their brigade information (for dropdown selection)
+  @Get('societies')
+  @Public()
+  async getSocieties() {
+    const societies = await this.dataSource.query(`
+      SELECT s.id, s.name, s.location, s.brigade_id, s.owner_id, s.created_at,
+             fb.name as brigade_name, fb.location as brigade_location,
+             fbs.name as state_name, fbs.state,
+             fbh.name as hq_name,
+             (SELECT COUNT(*) FROM building b WHERE b.society_id = s.id) as building_count
+      FROM society s
+      LEFT JOIN fire_brigade fb ON s.brigade_id = fb.id
+      LEFT JOIN fire_brigade_state fbs ON fb.state_id = fbs.id
+      LEFT JOIN fire_brigade_hq fbh ON fbs.hq_id = fbh.id
+      ORDER BY s.name
+    `);
+    return societies.map((s: any) => ({
+      id: s.id,
+      name: s.name,
+      location: s.location,
+      brigade_id: s.brigade_id,
+      owner_id: s.owner_id,
+      brigade_name: s.brigade_name,
+      state_name: s.state_name,
+      hq_name: s.hq_name,
+      building_count: parseInt(s.building_count) || 0,
+      created_at: s.created_at,
+      display_label: `${s.name} (${s.brigade_name || 'No Brigade'})`,
+    }));
+  }
+
+  // Get a single society by ID
+  @Get('societies/:id')
+  @Public()
+  async getSociety(@Param('id', ParseIntPipe) id: number) {
+    const society = await this.societyRepo.findOne({ where: { id } });
+    if (!society) {
+      return { error: 'Society not found' };
+    }
+    return society;
+  }
+
+  // Create a new society
+  @Post('societies')
+  @Public()
+  async createSociety(@Body() body: { name: string; location: string; brigade_id: number; owner_id?: number }) {
+    const result = await this.dataSource.query(`
+      INSERT INTO society (name, location, brigade_id, owner_id, created_at, updated_at)
+      VALUES ($1, $2, $3, $4, NOW(), NOW())
+      RETURNING *
+    `, [body.name, body.location, body.brigade_id, body.owner_id || 1]);
+    return result[0];
+  }
+
+  // Update a society
+  @Patch('societies/:id')
+  @Public()
+  async updateSociety(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() body: { name?: string; location?: string; brigade_id?: number }
+  ) {
+    const updates: string[] = [];
+    const values: any[] = [];
+    let paramIndex = 1;
+
+    if (body.name !== undefined) {
+      updates.push(`name = $${paramIndex++}`);
+      values.push(body.name);
+    }
+    if (body.location !== undefined) {
+      updates.push(`location = $${paramIndex++}`);
+      values.push(body.location);
+    }
+    if (body.brigade_id !== undefined) {
+      updates.push(`brigade_id = $${paramIndex++}`);
+      values.push(body.brigade_id);
+    }
+    updates.push(`updated_at = NOW()`);
+
+    if (updates.length === 1) {
+      return { error: 'No fields to update' };
+    }
+
+    values.push(id);
+    const result = await this.dataSource.query(`
+      UPDATE society SET ${updates.join(', ')} WHERE id = $${paramIndex} RETURNING *
+    `, values);
+
+    return result[0] || { error: 'Society not found' };
+  }
+
+  // Delete a society
+  @Delete('societies/:id')
+  @Public()
+  async deleteSociety(@Param('id', ParseIntPipe) id: number) {
+    // Check if society has buildings
+    const buildingCount = await this.dataSource.query(
+      `SELECT COUNT(*) as count FROM building WHERE society_id = $1`,
+      [id]
+    );
+    if (parseInt(buildingCount[0].count) > 0) {
+      return { error: 'Cannot delete society with existing buildings. Remove buildings first.' };
+    }
+
+    const result = await this.dataSource.query(
+      `DELETE FROM society WHERE id = $1 RETURNING id`,
+      [id]
+    );
+    if (result.length > 0) {
+      return { message: 'Society deleted successfully' };
+    }
+    return { error: 'Society not found' };
+  }
+
+  // Get all fire brigades (districts) for dropdown
+  @Get('brigades')
+  @Public()
+  async getBrigades() {
+    const brigades = await this.dataSource.query(`
+      SELECT fb.id, fb.name, fb.location, fb.status, fb.state_id,
+             fbs.name as state_name, fbs.state,
+             fbh.name as hq_name
+      FROM fire_brigade fb
+      LEFT JOIN fire_brigade_state fbs ON fb.state_id = fbs.id
+      LEFT JOIN fire_brigade_hq fbh ON fbs.hq_id = fbh.id
+      ORDER BY fb.name
+    `);
+    return brigades.map((b: any) => ({
+      id: b.id,
+      name: b.name,
+      location: b.location,
+      status: b.status,
+      state_id: b.state_id,
+      state_name: b.state_name,
+      hq_name: b.hq_name,
+      display_label: `${b.name} (${b.state_name || 'No State'})`,
+    }));
+  }
+
   @Get('with-status')
   @Public()
   async findAllWithStatus() {
@@ -56,6 +213,454 @@ export class BuildingController {
       floor_plan_updated_at: b.floorPlanUpdatedAt,
       created_at: b.created_at,
     }));
+  }
+
+  // Get buildings filtered by firefighter's jurisdiction level
+  // HQ level: all buildings in all states under the HQ
+  // State level: all buildings in all brigades under the state
+  // District/Brigade level: all buildings in societies linked to the brigade
+  @Get('by-jurisdiction/:userId')
+  @Public()
+  async getBuildingsByJurisdiction(@Param('userId', ParseIntPipe) userId: number) {
+    // First, get the employee record to determine jurisdiction level
+    const employee = await this.dataSource.query(`
+      SELECT e.id, e.user_id, e.brigade_id, e.state_id, e.hq_id,
+             fb.name as brigade_name, fb.state_id as brigade_state_id,
+             fbs.name as state_name, fbs.hq_id as state_hq_id,
+             fbh.name as hq_name
+      FROM employee e
+      LEFT JOIN fire_brigade fb ON e.brigade_id = fb.id
+      LEFT JOIN fire_brigade_state fbs ON e.state_id = fbs.id OR fb.state_id = fbs.id
+      LEFT JOIN fire_brigade_hq fbh ON e.hq_id = fbh.id OR fbs.hq_id = fbh.id
+      WHERE e.user_id = $1
+    `, [userId]);
+
+    if (!employee || employee.length === 0) {
+      return { buildings: [], jurisdiction: null, message: 'No employee record found for this user' };
+    }
+
+    const emp = employee[0];
+    let buildings: any[] = [];
+    let jurisdiction: { level: string; name: string; id: number } | null = null;
+
+    if (emp.hq_id) {
+      // HQ level - get ALL buildings under all states under this HQ
+      jurisdiction = { level: 'hq', name: emp.hq_name || 'HQ', id: emp.hq_id };
+      buildings = await this.dataSource.query(`
+        SELECT DISTINCT b.id, b.name, b.address, b.type, b.total_floors, b.apartments_per_floor,
+               b.has_floor_plan, b.floor_plan_updated_at, b.center_lat, b.center_lng, b.created_at,
+               s.name as society_name, fb.name as brigade_name, fbs.name as state_name
+        FROM building b
+        LEFT JOIN society s ON b.society_id = s.id
+        LEFT JOIN fire_brigade fb ON s.brigade_id = fb.id
+        LEFT JOIN fire_brigade_state fbs ON fb.state_id = fbs.id
+        LEFT JOIN fire_brigade_hq fbh ON fbs.hq_id = fbh.id
+        WHERE fbh.id = $1
+        ORDER BY b.created_at DESC
+      `, [emp.hq_id]);
+    } else if (emp.state_id) {
+      // State level - get all buildings under all brigades in this state
+      jurisdiction = { level: 'state', name: emp.state_name || 'State', id: emp.state_id };
+      buildings = await this.dataSource.query(`
+        SELECT DISTINCT b.id, b.name, b.address, b.type, b.total_floors, b.apartments_per_floor,
+               b.has_floor_plan, b.floor_plan_updated_at, b.center_lat, b.center_lng, b.created_at,
+               s.name as society_name, fb.name as brigade_name
+        FROM building b
+        LEFT JOIN society s ON b.society_id = s.id
+        LEFT JOIN fire_brigade fb ON s.brigade_id = fb.id
+        WHERE fb.state_id = $1
+        ORDER BY b.created_at DESC
+      `, [emp.state_id]);
+    } else if (emp.brigade_id) {
+      // District/Brigade level - get buildings in societies linked to this brigade
+      jurisdiction = { level: 'district', name: emp.brigade_name || 'District', id: emp.brigade_id };
+      buildings = await this.dataSource.query(`
+        SELECT DISTINCT b.id, b.name, b.address, b.type, b.total_floors, b.apartments_per_floor,
+               b.has_floor_plan, b.floor_plan_updated_at, b.center_lat, b.center_lng, b.created_at,
+               s.name as society_name
+        FROM building b
+        LEFT JOIN society s ON b.society_id = s.id
+        WHERE s.brigade_id = $1
+        ORDER BY b.created_at DESC
+      `, [emp.brigade_id]);
+    }
+
+    return {
+      buildings: buildings.map(b => ({
+        id: b.id,
+        name: b.name,
+        address: b.address,
+        type: b.type,
+        total_floors: b.total_floors || 1,
+        apartments_per_floor: b.apartments_per_floor || 1,
+        has_floor_plan: b.has_floor_plan || false,
+        floor_plan_updated_at: b.floor_plan_updated_at,
+        center_lat: b.center_lat ? parseFloat(b.center_lat) : null,
+        center_lng: b.center_lng ? parseFloat(b.center_lng) : null,
+        society_name: b.society_name,
+        brigade_name: b.brigade_name,
+        state_name: b.state_name,
+        created_at: b.created_at,
+      })),
+      jurisdiction,
+      count: buildings.length,
+    };
+  }
+
+  // ==================== FIRE BRIGADE HQ ENDPOINTS (Super Admin) ====================
+
+  @Get('fire-brigade-hqs')
+  @Public()
+  async getFireBrigadeHQs() {
+    const hqs = await this.dataSource.query(`
+      SELECT fbh.id, fbh.name, fbh.address, fbh.phone, fbh.email, fbh.status,
+             fbh.created_at, fbh.updated_at,
+             (SELECT COUNT(*) FROM fire_brigade_state fbs WHERE fbs.hq_id = fbh.id) as state_count,
+             (SELECT COUNT(*) FROM employee e WHERE e.hq_id = fbh.id) as employee_count
+      FROM fire_brigade_hq fbh
+      ORDER BY fbh.name
+    `);
+    return hqs.map((h: any) => ({
+      ...h,
+      state_count: parseInt(h.state_count) || 0,
+      employee_count: parseInt(h.employee_count) || 0,
+    }));
+  }
+
+  @Get('fire-brigade-hqs/:id')
+  @Public()
+  async getFireBrigadeHQ(@Param('id', ParseIntPipe) id: number) {
+    const hq = await this.dataSource.query(`
+      SELECT fbh.*,
+             (SELECT COUNT(*) FROM fire_brigade_state fbs WHERE fbs.hq_id = fbh.id) as state_count
+      FROM fire_brigade_hq fbh
+      WHERE fbh.id = $1
+    `, [id]);
+    return hq[0] || { error: 'HQ not found' };
+  }
+
+  @Post('fire-brigade-hqs')
+  @Public()
+  async createFireBrigadeHQ(@Body() body: { name: string; address?: string; phone?: string; email?: string }) {
+    // Generate credentials for the HQ admin
+    const generatedEmail = generateEmail(body.name, 'hq');
+    const generatedPassword = generatePassword();
+    const hashedPassword = await bcrypt.hash(generatedPassword, 10);
+
+    // Check if email already exists
+    const existingUser = await this.dataSource.query(
+      `SELECT id FROM users WHERE email = $1`, [generatedEmail]
+    );
+
+    let userId: number;
+    if (existingUser.length > 0) {
+      userId = existingUser[0].id;
+    } else {
+      // Create user account for HQ admin
+      const userResult = await this.dataSource.query(`
+        INSERT INTO users (email, password, name, role, is_active, created_at, updated_at)
+        VALUES ($1, $2, $3, 'fire_brigade_hq', true, NOW(), NOW())
+        RETURNING id
+      `, [generatedEmail, hashedPassword, `${body.name} Admin`]);
+      userId = userResult[0].id;
+    }
+
+    // Create the HQ and link to user
+    const result = await this.dataSource.query(`
+      INSERT INTO fire_brigade_hq (name, address, phone, email, status, user_id, created_at, updated_at)
+      VALUES ($1, $2, $3, $4, 'active', $5, NOW(), NOW())
+      RETURNING *
+    `, [body.name, body.address || null, body.phone || null, body.email || null, userId]);
+
+    return {
+      ...result[0],
+      credentials: {
+        email: generatedEmail,
+        password: generatedPassword,
+        role: 'fire_brigade_hq'
+      }
+    };
+  }
+
+  @Patch('fire-brigade-hqs/:id')
+  @Public()
+  async updateFireBrigadeHQEarly(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() body: { name?: string; address?: string; phone?: string; email?: string; status?: string }
+  ) {
+    const updates: string[] = [];
+    const values: any[] = [];
+    let paramIndex = 1;
+    if (body.name !== undefined) { updates.push(`name = $${paramIndex++}`); values.push(body.name); }
+    if (body.address !== undefined) { updates.push(`address = $${paramIndex++}`); values.push(body.address); }
+    if (body.phone !== undefined) { updates.push(`phone = $${paramIndex++}`); values.push(body.phone); }
+    if (body.email !== undefined) { updates.push(`email = $${paramIndex++}`); values.push(body.email); }
+    if (body.status !== undefined) { updates.push(`status = $${paramIndex++}`); values.push(body.status); }
+    updates.push(`updated_at = NOW()`);
+    if (updates.length === 1) return { error: 'No fields to update' };
+    values.push(id);
+    const result = await this.dataSource.query(
+      `UPDATE fire_brigade_hq SET ${updates.join(', ')} WHERE id = $${paramIndex} RETURNING *`,
+      values
+    );
+    return result[0] || { error: 'HQ not found' };
+  }
+
+  @Delete('fire-brigade-hqs/:id')
+  @Public()
+  async deleteFireBrigadeHQEarly(@Param('id', ParseIntPipe) id: number) {
+    const stateCount = await this.dataSource.query(
+      `SELECT COUNT(*) as count FROM fire_brigade_state WHERE hq_id = $1`, [id]
+    );
+    if (parseInt(stateCount[0].count) > 0) {
+      return { error: 'Cannot delete HQ with existing states. Remove states first.' };
+    }
+    const result = await this.dataSource.query(`DELETE FROM fire_brigade_hq WHERE id = $1 RETURNING id`, [id]);
+    if (result.length > 0) return { message: 'HQ deleted successfully' };
+    return { error: 'HQ not found' };
+  }
+
+  // ==================== FIRE BRIGADE STATE ENDPOINTS ====================
+
+  @Get('fire-brigade-states')
+  @Public()
+  async getFireBrigadeStates() {
+    const states = await this.dataSource.query(`
+      SELECT fbs.id, fbs.name, fbs.state, fbs.address, fbs.phone, fbs.status,
+             fbs.hq_id, fbs.created_at, fbs.updated_at,
+             fbh.name as hq_name,
+             (SELECT COUNT(*) FROM fire_brigade fb WHERE fb.state_id = fbs.id) as brigade_count,
+             (SELECT COUNT(*) FROM employee e WHERE e.state_id = fbs.id) as employee_count
+      FROM fire_brigade_state fbs
+      LEFT JOIN fire_brigade_hq fbh ON fbs.hq_id = fbh.id
+      ORDER BY fbs.name
+    `);
+    return states.map((s: any) => ({
+      ...s,
+      brigade_count: parseInt(s.brigade_count) || 0,
+      employee_count: parseInt(s.employee_count) || 0,
+    }));
+  }
+
+  @Get('fire-brigade-states/by-hq/:hqId')
+  @Public()
+  async getFireBrigadeStatesByHQEarly(@Param('hqId', ParseIntPipe) hqId: number) {
+    const states = await this.dataSource.query(`
+      SELECT fbs.id, fbs.name, fbs.state, fbs.address, fbs.phone, fbs.status,
+             fbs.hq_id, fbs.created_at,
+             (SELECT COUNT(*) FROM fire_brigade fb WHERE fb.state_id = fbs.id) as brigade_count
+      FROM fire_brigade_state fbs
+      WHERE fbs.hq_id = $1
+      ORDER BY fbs.name
+    `, [hqId]);
+    return states.map((s: any) => ({ ...s, brigade_count: parseInt(s.brigade_count) || 0 }));
+  }
+
+  @Post('fire-brigade-states')
+  @Public()
+  async createFireBrigadeState(@Body() body: { name: string; state: string; hq_id: number; address?: string; phone?: string }) {
+    // Generate credentials for the State admin
+    const generatedEmail = generateEmail(body.name, 'state');
+    const generatedPassword = generatePassword();
+    const hashedPassword = await bcrypt.hash(generatedPassword, 10);
+
+    // Check if email already exists
+    const existingUser = await this.dataSource.query(
+      `SELECT id FROM users WHERE email = $1`, [generatedEmail]
+    );
+
+    let userId: number;
+    if (existingUser.length > 0) {
+      userId = existingUser[0].id;
+    } else {
+      // Create user account for State admin
+      const userResult = await this.dataSource.query(`
+        INSERT INTO users (email, password, name, role, is_active, created_at, updated_at)
+        VALUES ($1, $2, $3, 'fire_brigade_state', true, NOW(), NOW())
+        RETURNING id
+      `, [generatedEmail, hashedPassword, `${body.name} Admin`]);
+      userId = userResult[0].id;
+    }
+
+    // Create the State and link to user
+    const result = await this.dataSource.query(`
+      INSERT INTO fire_brigade_state (name, state, hq_id, address, phone, status, user_id, created_at, updated_at)
+      VALUES ($1, $2, $3, $4, $5, 'active', $6, NOW(), NOW())
+      RETURNING *
+    `, [body.name, body.state, body.hq_id, body.address || null, body.phone || null, userId]);
+
+    return {
+      ...result[0],
+      credentials: {
+        email: generatedEmail,
+        password: generatedPassword,
+        role: 'fire_brigade_state'
+      }
+    };
+  }
+
+  @Patch('fire-brigade-states/:id')
+  @Public()
+  async updateFireBrigadeStateEarly(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() body: { name?: string; state?: string; hq_id?: number; address?: string; phone?: string; status?: string }
+  ) {
+    const updates: string[] = [];
+    const values: any[] = [];
+    let paramIndex = 1;
+    if (body.name !== undefined) { updates.push(`name = $${paramIndex++}`); values.push(body.name); }
+    if (body.state !== undefined) { updates.push(`state = $${paramIndex++}`); values.push(body.state); }
+    if (body.hq_id !== undefined) { updates.push(`hq_id = $${paramIndex++}`); values.push(body.hq_id); }
+    if (body.address !== undefined) { updates.push(`address = $${paramIndex++}`); values.push(body.address); }
+    if (body.phone !== undefined) { updates.push(`phone = $${paramIndex++}`); values.push(body.phone); }
+    if (body.status !== undefined) { updates.push(`status = $${paramIndex++}`); values.push(body.status); }
+    updates.push(`updated_at = NOW()`);
+    if (updates.length === 1) return { error: 'No fields to update' };
+    values.push(id);
+    const result = await this.dataSource.query(
+      `UPDATE fire_brigade_state SET ${updates.join(', ')} WHERE id = $${paramIndex} RETURNING *`,
+      values
+    );
+    return result[0] || { error: 'State not found' };
+  }
+
+  @Delete('fire-brigade-states/:id')
+  @Public()
+  async deleteFireBrigadeStateEarly(@Param('id', ParseIntPipe) id: number) {
+    const brigadeCount = await this.dataSource.query(
+      `SELECT COUNT(*) as count FROM fire_brigade WHERE state_id = $1`, [id]
+    );
+    if (parseInt(brigadeCount[0].count) > 0) {
+      return { error: 'Cannot delete state with existing brigades/stations. Remove them first.' };
+    }
+    const result = await this.dataSource.query(`DELETE FROM fire_brigade_state WHERE id = $1 RETURNING id`, [id]);
+    if (result.length > 0) return { message: 'State deleted successfully' };
+    return { error: 'State not found' };
+  }
+
+  // ==================== FIRE BRIGADE STATION ENDPOINTS ====================
+
+  @Get('fire-brigade-stations')
+  @Public()
+  async getFireBrigadeStations() {
+    const brigades = await this.dataSource.query(`
+      SELECT fb.id, fb.name, fb.location, fb.address, fb.phone, fb.email,
+             fb.capacity, fb.status, fb.state_id, fb.created_at, fb.updated_at,
+             fbs.name as state_name, fbs.state as state_code,
+             fbh.name as hq_name, fbh.id as hq_id,
+             (SELECT COUNT(*) FROM society s WHERE s.brigade_id = fb.id) as society_count,
+             (SELECT COUNT(*) FROM employee e WHERE e.brigade_id = fb.id) as employee_count
+      FROM fire_brigade fb
+      LEFT JOIN fire_brigade_state fbs ON fb.state_id = fbs.id
+      LEFT JOIN fire_brigade_hq fbh ON fbs.hq_id = fbh.id
+      ORDER BY fb.name
+    `);
+    return brigades.map((b: any) => ({
+      ...b,
+      society_count: parseInt(b.society_count) || 0,
+      employee_count: parseInt(b.employee_count) || 0,
+    }));
+  }
+
+  @Get('fire-brigade-stations/by-state/:stateId')
+  @Public()
+  async getFireBrigadeStationsByStateEarly(@Param('stateId', ParseIntPipe) stateId: number) {
+    const brigades = await this.dataSource.query(`
+      SELECT fb.id, fb.name, fb.location, fb.address, fb.phone, fb.email,
+             fb.capacity, fb.status, fb.state_id, fb.created_at,
+             (SELECT COUNT(*) FROM society s WHERE s.brigade_id = fb.id) as society_count
+      FROM fire_brigade fb
+      WHERE fb.state_id = $1
+      ORDER BY fb.name
+    `, [stateId]);
+    return brigades.map((b: any) => ({ ...b, society_count: parseInt(b.society_count) || 0 }));
+  }
+
+  @Post('fire-brigade-stations')
+  @Public()
+  async createFireBrigadeStation(@Body() body: {
+    name: string; location: string; state_id: number;
+    address?: string; phone?: string; email?: string; capacity?: number
+  }) {
+    // Generate credentials for the Station/District firefighter
+    const generatedEmail = generateEmail(body.name, 'station');
+    const generatedPassword = generatePassword();
+    const hashedPassword = await bcrypt.hash(generatedPassword, 10);
+
+    // Check if email already exists
+    const existingUser = await this.dataSource.query(
+      `SELECT id FROM users WHERE email = $1`, [generatedEmail]
+    );
+
+    let userId: number;
+    if (existingUser.length > 0) {
+      userId = existingUser[0].id;
+    } else {
+      // Create user account for Station firefighter
+      const userResult = await this.dataSource.query(`
+        INSERT INTO users (email, password, name, role, is_active, created_at, updated_at)
+        VALUES ($1, $2, $3, 'firefighter', true, NOW(), NOW())
+        RETURNING id
+      `, [generatedEmail, hashedPassword, `${body.name} Firefighter`]);
+      userId = userResult[0].id;
+    }
+
+    // Create the Station and link to user
+    const result = await this.dataSource.query(`
+      INSERT INTO fire_brigade (name, location, state_id, address, phone, email, capacity, status, user_id, created_at, updated_at)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, 'active', $8, NOW(), NOW())
+      RETURNING *
+    `, [body.name, body.location, body.state_id, body.address || null, body.phone || null, body.email || null, body.capacity || 10, userId]);
+
+    return {
+      ...result[0],
+      credentials: {
+        email: generatedEmail,
+        password: generatedPassword,
+        role: 'firefighter'
+      }
+    };
+  }
+
+  @Patch('fire-brigade-stations/:id')
+  @Public()
+  async updateFireBrigadeStationEarly(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() body: { name?: string; location?: string; state_id?: number; address?: string; phone?: string; email?: string; capacity?: number; status?: string }
+  ) {
+    const updates: string[] = [];
+    const values: any[] = [];
+    let paramIndex = 1;
+    if (body.name !== undefined) { updates.push(`name = $${paramIndex++}`); values.push(body.name); }
+    if (body.location !== undefined) { updates.push(`location = $${paramIndex++}`); values.push(body.location); }
+    if (body.state_id !== undefined) { updates.push(`state_id = $${paramIndex++}`); values.push(body.state_id); }
+    if (body.address !== undefined) { updates.push(`address = $${paramIndex++}`); values.push(body.address); }
+    if (body.phone !== undefined) { updates.push(`phone = $${paramIndex++}`); values.push(body.phone); }
+    if (body.email !== undefined) { updates.push(`email = $${paramIndex++}`); values.push(body.email); }
+    if (body.capacity !== undefined) { updates.push(`capacity = $${paramIndex++}`); values.push(body.capacity); }
+    if (body.status !== undefined) { updates.push(`status = $${paramIndex++}`); values.push(body.status); }
+    updates.push(`updated_at = NOW()`);
+    if (updates.length === 1) return { error: 'No fields to update' };
+    values.push(id);
+    const result = await this.dataSource.query(
+      `UPDATE fire_brigade SET ${updates.join(', ')} WHERE id = $${paramIndex} RETURNING *`,
+      values
+    );
+    return result[0] || { error: 'Station not found' };
+  }
+
+  @Delete('fire-brigade-stations/:id')
+  @Public()
+  async deleteFireBrigadeStationEarly(@Param('id', ParseIntPipe) id: number) {
+    const societyCount = await this.dataSource.query(
+      `SELECT COUNT(*) as count FROM society WHERE brigade_id = $1`, [id]
+    );
+    if (parseInt(societyCount[0].count) > 0) {
+      return { error: 'Cannot delete station with existing societies. Remove societies first.' };
+    }
+    const result = await this.dataSource.query(`DELETE FROM fire_brigade WHERE id = $1 RETURNING id`, [id]);
+    if (result.length > 0) return { message: 'Station deleted successfully' };
+    return { error: 'Station not found' };
   }
 
   @Get(':id')
@@ -1091,14 +1696,36 @@ export class BuildingController {
   @Public()
   async update(
     @Param('id', ParseIntPipe) id: number,
-    @Body() updateDto: { 
-      name?: string; 
-      address?: string; 
+    @Body() updateDto: {
+      name?: string;
+      address?: string;
       type?: string;
       society_id?: number;
+      total_floors?: number;
+      apartments_per_floor?: number;
+      totalFloors?: number;
+      apartmentsPerFloor?: number;
     },
   ) {
-    await this.buildingRepo.update(id, updateDto);
+    // Map snake_case to camelCase for entity properties
+    const mappedDto: any = {};
+
+    if (updateDto.name !== undefined) mappedDto.name = updateDto.name;
+    if (updateDto.address !== undefined) mappedDto.address = updateDto.address;
+    if (updateDto.type !== undefined) mappedDto.type = updateDto.type;
+    if (updateDto.society_id !== undefined) mappedDto.society_id = updateDto.society_id;
+
+    // Handle both snake_case and camelCase for these properties
+    const totalFloors = updateDto.total_floors ?? updateDto.totalFloors;
+    const apartmentsPerFloor = updateDto.apartments_per_floor ?? updateDto.apartmentsPerFloor;
+
+    if (totalFloors !== undefined) mappedDto.totalFloors = totalFloors;
+    if (apartmentsPerFloor !== undefined) mappedDto.apartmentsPerFloor = apartmentsPerFloor;
+
+    if (Object.keys(mappedDto).length > 0) {
+      await this.buildingRepo.update(id, mappedDto);
+    }
+
     return this.buildingRepo.findOne({ where: { id } });
   }
 

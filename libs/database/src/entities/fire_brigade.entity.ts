@@ -1,11 +1,19 @@
 import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, OneToMany, JoinColumn, CreateDateColumn, UpdateDateColumn } from 'typeorm';
 import { FireBrigadeState } from './fire_brigade_state.entity';
 import { Employee } from './employee.entity';
+import { User } from './user.entity';
 
 @Entity('fire_brigade')
 export class FireBrigade {
   @PrimaryGeneratedColumn()
   id: number;
+
+  @Column({ name: 'user_id', nullable: true })
+  userId: number;
+
+  @ManyToOne(() => User, { nullable: true })
+  @JoinColumn({ name: 'user_id' })
+  user: User;
 
   @Column()
   name: string;

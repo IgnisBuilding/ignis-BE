@@ -2,11 +2,19 @@ import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, OneToMany, JoinColum
 import { FireBrigadeHQ } from './fire_brigade_hq.entity';
 import { FireBrigade } from './fire_brigade.entity';
 import { Employee } from './employee.entity';
+import { User } from './user.entity';
 
 @Entity('fire_brigade_state')
 export class FireBrigadeState {
   @PrimaryGeneratedColumn()
   id: number;
+
+  @Column({ name: 'user_id', nullable: true })
+  userId: number;
+
+  @ManyToOne(() => User, { nullable: true })
+  @JoinColumn({ name: 'user_id' })
+  user: User;
 
   @Column()
   name: string;
