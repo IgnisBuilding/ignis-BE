@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Patch, Delete, UseGuards, Param, ParseIntPipe, Body, Req } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Delete, UseGuards, Param, ParseIntPipe, Body, Req, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource } from 'typeorm';
 import { building, floor, apartment, Society, room, nodes, edges, Opening, OpeningRoom, camera, User } from '@app/entities';
@@ -1203,8 +1203,17 @@ export class BuildingController {
               'lobby': 'lobby',
               'stairwell': 'stairwell',
               'office': 'office',
+              'garage': 'storage',
+              'stairs': 'stairwell',
+              'elevator': 'other',
+              'corridor': 'hallway',
+              'closet': 'storage',
+              'entry': 'lobby',
+              'outdoor': 'other',
+              'recreation': 'other',
+              'exit': 'other',
             };
-            const roomType = roomTypeMap[props.room_type] || props.room_type || 'other';
+            const roomType = roomTypeMap[props.room_type] || 'other';
 
             // Build centroid geometry if lat/lng provided
             let centroidSql = 'NULL';
@@ -1732,8 +1741,206 @@ export class BuildingController {
   @Delete(':id')
   @Public()
   async delete(@Param('id', ParseIntPipe) id: number) {
-    await this.buildingRepo.delete(id);
-    return { message: 'Building deleted successfully' };
+    const building = await this.buildingRepo.findOne({ where: { id } });
+    if (!building) {
+      throw new NotFoundException(`Building with id ${id} not found`);
+    }
+
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+
+    try {
+      // Get all floor IDs for this building
+      const floors = await queryRunner.query(
+        `SELECT id FROM floor WHERE building_id = $1`,
+        [id],
+      );
+      const floorIds = floors.map((f: any) => f.id);
+
+      if (floorIds.length > 0) {
+        // 1. Delete fire_detection_log (FK → camera, FK → hazards)
+        await queryRunner.query(`
+          DELETE FROM fire_detection_log WHERE camera_id IN (
+            SELECT id FROM camera WHERE building_id = $1 OR floor_id = ANY($2)
+          ) OR hazard_id IN (
+            SELECT id FROM hazards WHERE floor_id = ANY($2)
+              OR room_id IN (SELECT id FROM room WHERE floor_id = ANY($2))
+              OR node_id IN (SELECT id FROM nodes WHERE floor_id = ANY($2))
+          )
+        `, [id, floorIds]);
+
+        // 2. Delete cameras (FK → building, floor, room, nodes)
+        await queryRunner.query(`
+          DELETE FROM camera WHERE building_id = $1 OR floor_id = ANY($2)
+        `, [id, floorIds]);
+
+        // 3. Delete fire_alert_config (FK → building)
+        await queryRunner.query(`DELETE FROM fire_alert_config WHERE building_id = $1`, [id]);
+
+        // 4. Delete features (FK → room, floor)
+        await queryRunner.query(`
+          DELETE FROM features WHERE room_id IN (
+            SELECT id FROM room WHERE floor_id = ANY($1)
+          ) OR floor_id = ANY($1)
+        `, [floorIds]);
+
+        // 5. Detach sensors (nullable FKs → building, room, node, floor)
+        await queryRunner.query(`
+          UPDATE sensors SET building_id = NULL, room_id = NULL, node_id = NULL, floor_id = NULL
+          WHERE building_id = $1 OR floor_id = ANY($2)
+        `, [id, floorIds]);
+
+        // 6. Delete trapped_occupant_blocking_hazards (FK → trapped_occupants, hazards)
+        await queryRunner.query(`
+          DELETE FROM trapped_occupant_blocking_hazards
+          WHERE trapped_occupant_id IN (
+            SELECT id FROM trapped_occupants WHERE node_id IN (
+              SELECT id FROM nodes WHERE floor_id = ANY($1)
+            ) OR floor_id = ANY($1)
+          ) OR hazard_id IN (
+            SELECT id FROM hazards WHERE floor_id = ANY($1)
+              OR room_id IN (SELECT id FROM room WHERE floor_id = ANY($1))
+              OR node_id IN (SELECT id FROM nodes WHERE floor_id = ANY($1))
+          )
+        `, [floorIds]);
+
+        // 7. Delete isolation_events (FK → nodes, hazards, trapped_occupants, rescue_teams)
+        await queryRunner.query(`
+          DELETE FROM isolation_events WHERE node_id IN (
+            SELECT id FROM nodes WHERE floor_id = ANY($1)
+          ) OR hazard_id IN (
+            SELECT id FROM hazards WHERE floor_id = ANY($1)
+              OR room_id IN (SELECT id FROM room WHERE floor_id = ANY($1))
+              OR node_id IN (SELECT id FROM nodes WHERE floor_id = ANY($1))
+          ) OR trapped_occupant_id IN (
+            SELECT id FROM trapped_occupants WHERE node_id IN (
+              SELECT id FROM nodes WHERE floor_id = ANY($1)
+            ) OR floor_id = ANY($1)
+          )
+        `, [floorIds]);
+
+        // 8. Delete evacuation_route (FK → nodes)
+        await queryRunner.query(`
+          DELETE FROM evacuation_route WHERE start_node_id IN (
+            SELECT id FROM nodes WHERE floor_id = ANY($1)
+          ) OR end_node_id IN (
+            SELECT id FROM nodes WHERE floor_id = ANY($1)
+          )
+        `, [floorIds]);
+
+        // 9. Detach rescue_teams from trapped_occupants (FK → trapped_occupants)
+        await queryRunner.query(`
+          UPDATE rescue_teams SET current_assignment_id = NULL
+          WHERE current_assignment_id IN (
+            SELECT id FROM trapped_occupants WHERE node_id IN (
+              SELECT id FROM nodes WHERE floor_id = ANY($1)
+            ) OR floor_id = ANY($1)
+          )
+        `, [floorIds]);
+
+        // 10. Delete trapped_occupants (FK → nodes, floor, rescue_teams)
+        await queryRunner.query(`
+          DELETE FROM trapped_occupants WHERE node_id IN (
+            SELECT id FROM nodes WHERE floor_id = ANY($1)
+          ) OR floor_id = ANY($1)
+        `, [floorIds]);
+
+        // 11. Delete hazards (FK → apartment, node, room, floor)
+        await queryRunner.query(`
+          DELETE FROM hazards
+          WHERE floor_id = ANY($1)
+             OR room_id IN (SELECT id FROM room WHERE floor_id = ANY($1))
+             OR node_id IN (SELECT id FROM nodes WHERE floor_id = ANY($1))
+             OR apartment_id IN (SELECT id FROM apartment WHERE floor_id = ANY($1))
+        `, [floorIds]);
+
+        // 12. Delete safe_points (FK → nodes, floor)
+        await queryRunner.query(`
+          DELETE FROM safe_points WHERE node_id IN (
+            SELECT id FROM nodes WHERE floor_id = ANY($1)
+          ) OR floor_id = ANY($1)
+        `, [floorIds]);
+
+        // 13. Delete edges (FK → nodes)
+        await queryRunner.query(`
+          DELETE FROM edges WHERE source_id IN (
+            SELECT id FROM nodes WHERE floor_id = ANY($1)
+          ) OR target_id IN (
+            SELECT id FROM nodes WHERE floor_id = ANY($1)
+          )
+        `, [floorIds]);
+
+        // 14. Delete opening_rooms (FK → opening, room)
+        await queryRunner.query(`
+          DELETE FROM opening_rooms WHERE opening_id IN (
+            SELECT id FROM opening WHERE floor_id = ANY($1)
+          )
+        `, [floorIds]);
+
+        // 15. Delete openings (FK → floor, nodes)
+        await queryRunner.query(`DELETE FROM opening WHERE floor_id = ANY($1)`, [floorIds]);
+
+        // 16. Delete nodes (FK → room, floor, apartment)
+        await queryRunner.query(`DELETE FROM nodes WHERE floor_id = ANY($1)`, [floorIds]);
+
+        // 17. Delete rooms (FK → apartment, floor)
+        await queryRunner.query(`DELETE FROM room WHERE floor_id = ANY($1)`, [floorIds]);
+
+        // 18. Delete incident_log (FK → apartment, floor)
+        await queryRunner.query(`
+          DELETE FROM incident_log WHERE apartment_id IN (
+            SELECT id FROM apartment WHERE floor_id = ANY($1)
+          ) OR floor_id = ANY($1)
+        `, [floorIds]);
+
+        // 19. Detach users from apartments (FK → apartment)
+        await queryRunner.query(`
+          UPDATE users SET apartment_id = NULL
+          WHERE apartment_id IN (
+            SELECT id FROM apartment WHERE floor_id = ANY($1)
+          )
+        `, [floorIds]);
+
+        // 20. Delete apartments (FK → floor)
+        await queryRunner.query(`DELETE FROM apartment WHERE floor_id = ANY($1)`, [floorIds]);
+
+        // 21. Detach rescue_teams from floors (FK → floor)
+        await queryRunner.query(`
+          UPDATE rescue_teams SET current_floor_id = NULL
+          WHERE current_floor_id = ANY($1)
+        `, [floorIds]);
+      } else {
+        // Even with no floors, clean up building-level references
+        await queryRunner.query(`
+          DELETE FROM fire_detection_log WHERE camera_id IN (
+            SELECT id FROM camera WHERE building_id = $1
+          )
+        `, [id]);
+        await queryRunner.query(`DELETE FROM camera WHERE building_id = $1`, [id]);
+        await queryRunner.query(`DELETE FROM fire_alert_config WHERE building_id = $1`, [id]);
+        await queryRunner.query(`UPDATE sensors SET building_id = NULL WHERE building_id = $1`, [id]);
+      }
+
+      // 22. Delete floors (FK → building)
+      await queryRunner.query(`DELETE FROM floor WHERE building_id = $1`, [id]);
+
+      // 23. Delete the building itself
+      await queryRunner.query(`DELETE FROM building WHERE id = $1`, [id]);
+
+      await queryRunner.commitTransaction();
+
+      return {
+        message: 'Building deleted successfully',
+        deletedBuildingId: id,
+        floorsRemoved: floorIds.length,
+      };
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      throw error;
+    } finally {
+      await queryRunner.release();
+    }
   }
 
   // Handle differential (incremental) floor plan saves

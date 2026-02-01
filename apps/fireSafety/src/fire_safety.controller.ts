@@ -466,7 +466,7 @@ export class FireSafetyController {
         const result = await this.dataSource.query(insertQuery, [
           zone.nodeId,
           dto.type,
-          dto.severity,
+          dto.severity.toLowerCase(),
           dto.status,
           apartmentId,
         ]);
