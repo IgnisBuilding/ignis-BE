@@ -5,6 +5,7 @@ import { Repository } from 'typeorm';
 import * as bcrypt from 'bcryptjs';
 import { User } from '@app/entities';
 import { LoginDto, RegisterDto } from '../dto/auth.dto';
+import { Role } from '../enums/role.enum';
 
 @Injectable()
 export class AuthService {
@@ -13,6 +14,16 @@ export class AuthService {
     private userRepository: Repository<User>,
     private jwtService: JwtService,
   ) {}
+
+  // Generate initials from name
+  private generateInitials(name: string): string {
+    if (!name) return 'U';
+    const parts = name.trim().split(/\s+/);
+    if (parts.length === 1) {
+      return parts[0].substring(0, 2).toUpperCase();
+    }
+    return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+  }
 
   async register(registerDto: RegisterDto) {
     const existingUser = await this.userRepository.findOne({
@@ -25,15 +36,20 @@ export class AuthService {
 
     const hashedPassword = await bcrypt.hash(registerDto.password, 10);
 
+    // Default role is 'resident' for new registrations
     const user = this.userRepository.create({
       ...registerDto,
       password: hashedPassword,
+      role: registerDto.role || Role.RESIDENT,
     });
 
     await this.userRepository.save(user);
 
     const { password, ...result } = user;
-    return result;
+    return {
+      ...result,
+      initials: this.generateInitials(user.name),
+    };
   }
 
   async login(loginDto: LoginDto) {
@@ -65,6 +81,8 @@ export class AuthService {
         email: user.email,
         name: user.name,
         role: user.role,
+        phone: user.phone,
+        initials: this.generateInitials(user.name),
       },
     };
   }
@@ -75,6 +93,21 @@ export class AuthService {
       return null;
     }
     const { password, ...result } = user;
-    return result;
+    return {
+      ...result,
+      initials: this.generateInitials(user.name),
+    };
+  }
+
+  async findById(userId: number) {
+    const user = await this.userRepository.findOne({ where: { id: userId } });
+    if (!user) {
+      return null;
+    }
+    const { password, ...result } = user;
+    return {
+      ...result,
+      initials: this.generateInitials(user.name),
+    };
   }
 }
