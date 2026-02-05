@@ -22,4 +22,11 @@ export class AuthController {
   getProfile(@Request() req) {
     return this.authService.validateUser(req.user.userId);
   }
+
+  // Alias for profile - commonly used endpoint name
+  @UseGuards(JwtAuthGuard)
+  @Get('me')
+  getMe(@Request() req) {
+    return this.authService.findById(req.user.userId);
+  }
 }
