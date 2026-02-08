@@ -20,6 +20,12 @@ export class building {
   @Column({ nullable: true })
   society_id: number;
 
+  @Column({ nullable: true })
+  city: string;
+
+  @Column({ nullable: true })
+  area: string;
+
   @Column({ name: 'scale_pixels_per_meter', type: 'numeric', precision: 12, scale: 6, nullable: true })
   scalePixelsPerMeter: number;
 

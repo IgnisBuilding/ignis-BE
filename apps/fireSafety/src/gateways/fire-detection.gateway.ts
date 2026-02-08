@@ -117,6 +117,30 @@ export class FireDetectionGateway implements OnGatewayInit, OnGatewayConnection,
   }
 
   /**
+   * Emit hazard created event (manual fire placement from web/Android)
+   */
+  emitHazardCreated(hazard: any) {
+    const buildingId = hazard.floor?.building_id || hazard.floorId;
+    this.server.emit('hazard.created', hazard);
+    if (buildingId) {
+      this.server.to(`building:${buildingId}`).emit('hazard.created:building', hazard);
+    }
+    this.logger.log(`Hazard created event emitted - ID: ${hazard.id}`);
+  }
+
+  /**
+   * Emit hazard resolved event (manual resolution)
+   */
+  emitHazardResolved(hazard: any) {
+    const buildingId = hazard.floor?.building_id || hazard.floorId;
+    this.server.emit('hazard.resolved', hazard);
+    if (buildingId) {
+      this.server.to(`building:${buildingId}`).emit('hazard.resolved:building', hazard);
+    }
+    this.logger.log(`Hazard resolved event emitted - ID: ${hazard.id}`);
+  }
+
+  /**
    * Get count of connected clients
    */
   getConnectedClientsCount(): number {

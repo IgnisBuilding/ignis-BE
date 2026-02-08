@@ -30,6 +30,8 @@ import { camera } from './entities/camera.entity';
 import { fire_detection_log } from './entities/fire_detection_log.entity';
 import { fire_alert_config } from './entities/fire_alert_config.entity';
 import { SafePoint } from './entities/safe_point.entity';
+import { UserPosition } from './entities/user-position.entity';
+import { NavigationSession } from './entities/navigation-session.entity';
 
 @Module({
   imports: [
@@ -73,6 +75,8 @@ import { SafePoint } from './entities/safe_point.entity';
         fire_detection_log,
         fire_alert_config,
         SafePoint,
+        UserPosition,
+        NavigationSession,
       ],
       synchronize: false,
       logging: true,
