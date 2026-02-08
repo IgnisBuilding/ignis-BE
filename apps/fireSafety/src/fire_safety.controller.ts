@@ -403,7 +403,7 @@ export class FireSafetyController {
             'geometry', ST_AsGeoJSON(ST_Transform(ur.geometry, 4326))::json,
             'properties', json_build_object(
               'id', ur.id,
-              'name', ur.name || ' (F' || ur.floor_id || ')',
+              'name', ur.name || ' (Floor ' || COALESCE(f.level::text, '0') || ')',
               'type', ur.type,
               'floor_id', ur.floor_id,
               'node_id', rn.node_id,
