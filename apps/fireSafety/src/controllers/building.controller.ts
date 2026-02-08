@@ -124,34 +124,24 @@ export class BuildingController {
     // Use center_lat/center_lng for distance calculation (works even without geometry)
     // Also try PostGIS geometry if available
     const result = await this.dataSource.query(`
-      SELECT id, name, address, type, city, area, center_lat, center_lng,
-        CASE
-          WHEN geometry IS NOT NULL THEN
-            ST_Distance(
-              ST_Transform(geometry, 4326)::geography,
-              ST_SetSRID(ST_MakePoint($2, $1), 4326)::geography
-            )
-          ELSE
-            ST_Distance(
-              ST_SetSRID(ST_MakePoint(center_lng, center_lat), 4326)::geography,
-              ST_SetSRID(ST_MakePoint($2, $1), 4326)::geography
-            )
-        END as distance_meters
-      FROM building
-      WHERE center_lat IS NOT NULL AND center_lng IS NOT NULL
-      HAVING
-        CASE
-          WHEN geometry IS NOT NULL THEN
-            ST_Distance(
-              ST_Transform(geometry, 4326)::geography,
-              ST_SetSRID(ST_MakePoint($2, $1), 4326)::geography
-            )
-          ELSE
-            ST_Distance(
-              ST_SetSRID(ST_MakePoint(center_lng, center_lat), 4326)::geography,
-              ST_SetSRID(ST_MakePoint($2, $1), 4326)::geography
-            )
-        END <= $3
+      SELECT * FROM (
+        SELECT id, name, address, type, city, area, center_lat, center_lng,
+          CASE
+            WHEN geometry IS NOT NULL THEN
+              ST_Distance(
+                ST_Transform(geometry, 4326)::geography,
+                ST_SetSRID(ST_MakePoint($2, $1), 4326)::geography
+              )
+            ELSE
+              ST_Distance(
+                ST_SetSRID(ST_MakePoint(center_lng::float, center_lat::float), 4326)::geography,
+                ST_SetSRID(ST_MakePoint($2, $1), 4326)::geography
+              )
+          END as distance_meters
+        FROM building
+        WHERE center_lat IS NOT NULL AND center_lng IS NOT NULL
+      ) sub
+      WHERE distance_meters <= $3
       ORDER BY distance_meters ASC
       LIMIT 1
     `, [latitude, longitude, radiusMeters]);
