@@ -50,8 +50,4 @@ export class apartment {
 
   @OneToMany(() => room, (room) => room.apartment)
   rooms: room[];
-
-  // Residents are now stored in users table with role='resident' and apartment_id FK
-  @OneToMany(() => User, (user) => user.apartment)
-  residents: User[];
 }

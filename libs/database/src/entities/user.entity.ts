@@ -1,4 +1,4 @@
-import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn, OneToMany, ManyToOne, JoinColumn } from 'typeorm';
+import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn, OneToMany } from 'typeorm';
 import { apartment } from './apartment.entity';
 
 @Entity('users')
@@ -25,17 +25,10 @@ export class User {
   @Column({ nullable: true })
   phone: string;
 
-  @Column({ name: 'apartment_id', nullable: true })
-  apartmentId: number;
-
-  @ManyToOne(() => apartment, { nullable: true })
-  @JoinColumn({ name: 'apartment_id' })
-  apartment: apartment;
-
   @Column({ name: 'emergency_contact', nullable: true })
   emergencyContact: string;
 
-  // Relation for apartments owned by this user
+  // Apartments owned by this user (via apartment.owner_id)
   @OneToMany(() => apartment, (apartment) => apartment.owner)
   ownedApartments: apartment[];
 
