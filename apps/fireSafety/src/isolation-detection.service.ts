@@ -495,7 +495,7 @@ export class IsolationDetectionService {
   ): Promise<boolean> {
     // First check if there are any exit nodes in the database
     const exitNodesCheck = await this.dataSource.query(
-      `SELECT COUNT(*) as count FROM nodes WHERE type IN ('exit', 'emergency_exit', 'fire_exit', 'stairway', 'stairs')`,
+      `SELECT COUNT(*) as count FROM nodes WHERE type IN ('exit', 'emergency_exit', 'fire_exit', 'stairway', 'stairs', 'door')`,
     );
 
     if (!exitNodesCheck[0]?.count || parseInt(exitNodesCheck[0].count) === 0) {
@@ -524,7 +524,7 @@ export class IsolationDetectionService {
     try {
       const result = await this.dataSource.query(
         `WITH exit_nodes AS (
-          SELECT id as node_id FROM nodes WHERE type IN ('exit', 'emergency_exit', 'fire_exit', 'stairway', 'stairs')
+          SELECT id as node_id FROM nodes WHERE type IN ('exit', 'emergency_exit', 'fire_exit', 'stairway', 'stairs', 'door')
         )
         SELECT EXISTS (
           SELECT 1 FROM pgr_dijkstra(

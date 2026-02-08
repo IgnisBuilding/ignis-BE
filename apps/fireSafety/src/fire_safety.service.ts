@@ -2111,7 +2111,7 @@ export class FireSafetyService {
           ST_Transform((SELECT geometry FROM nodes WHERE id = $1), 4326)::geography
         ) as distance
       FROM nodes n
-      WHERE n.type IN ('exit', 'emergency_exit', 'entry', 'door', 'stairs', 'other')
+      WHERE n.type IN ('exit', 'emergency_exit', 'entry', 'door', 'stairs')
         AND n.id NOT IN (${blockedNodesSQL})
       ORDER BY distance ASC
       LIMIT 5
