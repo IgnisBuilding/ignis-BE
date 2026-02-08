@@ -1215,14 +1215,13 @@ export class FireSafetyService {
   }
 
   /**
-   * Enhances route geometry by snapping wall-crossing segments through nearby door nodes.
+   * Enhances route geometry by detecting wall-crossing segments and inserting
+   * the centroid of crossed rooms as waypoints, forcing the path to go through
+   * room interiors rather than diagonally clipping walls.
    *
-   * For each consecutive pair of route coordinates, checks if the straight line
-   * crosses through any room polygon where neither point is inside. If so,
-   * finds the nearest door node (type='door') and inserts it as a waypoint.
-   *
-   * Uses actual door nodes from the database instead of room boundary centroids,
-   * ensuring the route passes through real doorway positions.
+   * The route already visits door and room nodes correctly, but straight-line
+   * edges between them can clip adjacent room walls in densely packed layouts.
+   * This post-processing adds room interior points at each wall crossing.
    */
   private async enhanceRouteWithDoorNodes(geoJSON: any): Promise<any> {
     if (!geoJSON?.features?.[0]?.geometry?.coordinates) {
@@ -1233,84 +1232,112 @@ export class FireSafetyService {
     if (routeCoords.length < 2) return null;
 
     try {
-      // Build route LineString in WKT (coordinates are in 4326)
       const coordsWkt = routeCoords.map((c: number[]) => `${c[0]} ${c[1]}`).join(', ');
       const routeLineWkt = `LINESTRING(${coordsWkt})`;
 
-      // Find door nodes near the route and their position along the route
-      // For each door near the route, also check if the route actually crosses
-      // a room boundary near that door
-      const doorWaypointsQuery = `
+      // For each route segment that crosses a room wall, find the crossed
+      // room's centroid as a waypoint. Use ST_LineLocatePoint on the segment
+      // to determine where in the segment the room centroid projects to.
+      const crossingQuery = `
         WITH route_line AS (
           SELECT ST_Transform(ST_SetSRID(ST_GeomFromText($1), 4326), 3857) AS geom
+        ),
+        route_points AS (
+          SELECT (dp).path[1] AS idx, (dp).geom AS pt
+          FROM route_line, ST_DumpPoints(geom) AS dp
+        ),
+        route_segments AS (
+          SELECT p1.idx AS seg_idx,
+            ST_MakeLine(p1.pt, p2.pt) AS geom
+          FROM route_points p1
+          JOIN route_points p2 ON p2.idx = p1.idx + 1
+        ),
+        crossing_rooms AS (
+          SELECT DISTINCT ON (rs.seg_idx, r.id)
+            rs.seg_idx, r.id AS room_id, r.name AS room_name,
+            rs.geom AS seg_geom,
+            ST_Centroid(r.geometry) AS room_centroid
+          FROM route_segments rs
+          JOIN room r ON ST_Crosses(rs.geom, ST_Boundary(r.geometry))
+        ),
+        crossing_waypoints AS (
+          SELECT
+            cr.seg_idx,
+            cr.room_id,
+            cr.room_name,
+            -- Use the closest point on the segment to the room centroid
+            -- projected slightly toward the room interior
+            ST_X(ST_Transform(
+              ST_ClosestPoint(cr.seg_geom, cr.room_centroid),
+              4326
+            )) AS seg_cross_lon,
+            ST_Y(ST_Transform(
+              ST_ClosestPoint(cr.seg_geom, cr.room_centroid),
+              4326
+            )) AS seg_cross_lat,
+            -- Also get the room centroid itself
+            ST_X(ST_Transform(cr.room_centroid, 4326)) AS centroid_lon,
+            ST_Y(ST_Transform(cr.room_centroid, 4326)) AS centroid_lat,
+            ST_LineLocatePoint(cr.seg_geom, cr.room_centroid) AS seg_fraction,
+            ST_Distance(cr.room_centroid, cr.seg_geom) AS centroid_dist,
+            ROW_NUMBER() OVER (
+              PARTITION BY cr.seg_idx ORDER BY ST_Distance(cr.room_centroid, cr.seg_geom)
+            ) AS rn
+          FROM crossing_rooms cr
         )
-        SELECT
-          n.id,
-          ST_X(ST_Transform(n.geometry, 4326)) AS lon,
-          ST_Y(ST_Transform(n.geometry, 4326)) AS lat,
-          ST_LineLocatePoint(rl.geom, n.geometry) AS route_fraction,
-          ST_Distance(n.geometry, rl.geom) AS dist_to_route,
-          -- Check if the closest point on route to this door is near a room boundary
-          EXISTS (
-            SELECT 1 FROM room r
-            WHERE ST_DWithin(n.geometry, ST_Boundary(r.geometry), 3)
-          ) AS is_on_room_boundary
-        FROM nodes n, route_line rl
-        WHERE n.type = 'door'
-          AND ST_DWithin(n.geometry, rl.geom, 10)
-        ORDER BY ST_LineLocatePoint(rl.geom, n.geometry)
+        SELECT seg_idx, centroid_lon, centroid_lat, round(seg_fraction::numeric, 3) AS frac
+        FROM crossing_waypoints
+        WHERE rn <= 2
+        ORDER BY seg_idx, seg_fraction
       `;
 
-      const doorWaypoints = await this.dataSource.query(doorWaypointsQuery, [routeLineWkt]);
+      const crossingResults = await this.dataSource.query(crossingQuery, [routeLineWkt]);
 
-      // Filter to only doors that are on room boundaries and close to the route
-      const validDoors = (doorWaypoints || []).filter(
-        (d: any) => d.is_on_room_boundary && parseFloat(d.dist_to_route) < 6,
-      );
-
-      if (validDoors.length === 0) {
+      if (!crossingResults || crossingResults.length === 0) {
         return null;
       }
 
-      // Build enhanced coordinates by inserting door waypoints along the route
-      const enhancedCoords: number[][] = [];
-      let waypointIdx = 0;
+      // Group waypoints by segment — use the centroid of each crossed room
+      // as a waypoint to route through room interiors instead of clipping walls
+      const waypointsBySegment = new Map<number, number[][]>();
+      for (const row of crossingResults) {
+        const segIdx = parseInt(row.seg_idx);
+        const coord = [parseFloat(row.centroid_lon), parseFloat(row.centroid_lat)];
 
-      for (let i = 0; i < routeCoords.length; i++) {
-        const currentCoord = routeCoords[i];
-        const currentFraction = i / Math.max(routeCoords.length - 1, 1);
-
-        // Insert any door waypoints that belong before this route point
-        while (
-          waypointIdx < validDoors.length &&
-          parseFloat(validDoors[waypointIdx].route_fraction) <= currentFraction + 0.02
-        ) {
-          const wp = validDoors[waypointIdx];
-          const wpCoord = [parseFloat(wp.lon), parseFloat(wp.lat)];
-
-          const lastCoord = enhancedCoords.length > 0
-            ? enhancedCoords[enhancedCoords.length - 1]
-            : null;
-
-          // Only insert if not too close to last point or current point
-          if ((!lastCoord || this.coordDistance(wpCoord, lastCoord) > 0.00002) &&
-              this.coordDistance(wpCoord, currentCoord) > 0.00002) {
-            enhancedCoords.push(wpCoord);
-          }
-          waypointIdx++;
+        if (!waypointsBySegment.has(segIdx)) {
+          waypointsBySegment.set(segIdx, []);
         }
 
-        // Add the current route point
-        const lastCoord = enhancedCoords.length > 0
-          ? enhancedCoords[enhancedCoords.length - 1]
-          : null;
-
-        if (!lastCoord || this.coordDistance(currentCoord, lastCoord) > 0.00001) {
-          enhancedCoords.push(currentCoord);
+        const segWps = waypointsBySegment.get(segIdx)!;
+        const lastWp = segWps.length > 0 ? segWps[segWps.length - 1] : null;
+        if (!lastWp || this.coordDistance(coord, lastWp) > 0.00002) {
+          segWps.push(coord);
         }
       }
 
-      // Only update if we added waypoints
+      // Rebuild route with waypoint detours at wall crossings
+      const enhancedCoords: number[][] = [routeCoords[0]];
+      const addPoint = (coord: number[]) => {
+        const last = enhancedCoords[enhancedCoords.length - 1];
+        // Skip exact or near-exact duplicates of last point
+        if (this.coordDistance(coord, last) > 0.000005) {
+          enhancedCoords.push(coord);
+        }
+      };
+
+      for (let i = 0; i < routeCoords.length - 1; i++) {
+        const segIdx = i + 1; // ST_DumpPoints is 1-based
+        const waypoints = waypointsBySegment.get(segIdx);
+
+        if (waypoints) {
+          for (const wp of waypoints) {
+            addPoint(wp);
+          }
+        }
+
+        addPoint(routeCoords[i + 1]);
+      }
+
       if (enhancedCoords.length > routeCoords.length) {
         geoJSON.features[0].geometry.coordinates = enhancedCoords;
         geoJSON.features[0].properties.doorwayEnhanced = true;
