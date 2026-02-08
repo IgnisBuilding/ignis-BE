@@ -5,6 +5,7 @@ import {
   Put,
   Body,
   Param,
+  Query,
   Delete,
   ParseIntPipe,
   BadRequestException,
@@ -25,36 +26,77 @@ export class FireSafetyController {
   ) {}
 
   @Get('emergency/exits')
-  getEmergencyExits() {
-    return {
-      building: 'Office Tower A',
-      floors: 10,
-      emergencyExits: [
-        {
-          exitId: 'EXIT-001',
-          location: 'Ground Floor - North Wing',
-          capacity: 150,
-          status: 'OPERATIONAL',
-          coordinates: { lat: 40.7128, lng: -74.006 },
-        },
-        {
-          exitId: 'EXIT-002',
-          location: 'Ground Floor - South Wing',
-          capacity: 120,
-          status: 'OPERATIONAL',
-          coordinates: { lat: 40.7127, lng: -74.0061 },
-        },
-        {
-          exitId: 'EXIT-003',
-          location: 'First Floor - East Wing',
-          capacity: 80,
-          status: 'UNDER_MAINTENANCE',
-          coordinates: { lat: 40.7129, lng: -74.0059 },
-        },
-      ],
-      totalCapacity: 350,
-      lastUpdated: new Date().toISOString(),
-    };
+  async getEmergencyExits(@Query('building_id') buildingIdParam?: string) {
+    try {
+      const buildingId = buildingIdParam ? parseInt(buildingIdParam, 10) : null;
+
+      // Query real exit nodes from database (including doors as potential exits)
+      const exitNodesQuery = `
+        SELECT
+          n.id,
+          n.type,
+          n.description,
+          f.level as floor_level,
+          f.name as floor_name,
+          b.name as building_name,
+          ST_X(ST_Transform(n.geometry, 4326)) as lng,
+          ST_Y(ST_Transform(n.geometry, 4326)) as lat,
+          CASE
+            WHEN EXISTS (SELECT 1 FROM hazards h WHERE h.status = 'active' AND h.node_id = n.id)
+            THEN 'BLOCKED_BY_FIRE'
+            ELSE 'OPERATIONAL'
+          END as status
+        FROM nodes n
+        JOIN floor f ON n.floor_id = f.id
+        JOIN building b ON f.building_id = b.id
+        WHERE n.type IN ('exit', 'emergency_exit', 'fire_exit', 'entrance', 'door')
+        ${buildingId ? 'AND f.building_id = $1' : ''}
+        ORDER BY f.level, n.type
+      `;
+
+      const params = buildingId ? [buildingId] : [];
+      const exitNodes = await this.dataSource.query(exitNodesQuery, params);
+
+      // Get building info
+      const buildingQuery = buildingId
+        ? `SELECT name, (SELECT COUNT(*) FROM floor WHERE building_id = $1) as floor_count FROM building WHERE id = $1`
+        : `SELECT name, (SELECT COUNT(*) FROM floor WHERE building_id = building.id) as floor_count FROM building LIMIT 1`;
+      const buildingParams = buildingId ? [buildingId] : [];
+      const buildingInfo = await this.dataSource.query(buildingQuery, buildingParams);
+
+      const emergencyExits = (exitNodes || []).map((node: any) => ({
+        exitId: `EXIT-${String(node.id).padStart(3, '0')}`,
+        nodeId: node.id,
+        location: `${node.floor_name || `Floor ${node.floor_level}`} - ${node.description || node.type}`,
+        capacity: 100, // Default capacity - could be stored in node metadata
+        status: node.status,
+        coordinates: { lat: parseFloat(node.lat) || 0, lng: parseFloat(node.lng) || 0 },
+        floorLevel: node.floor_level,
+      }));
+
+      return {
+        building: buildingInfo[0]?.name || 'Unknown Building',
+        floors: parseInt(buildingInfo[0]?.floor_count || '0', 10),
+        emergencyExits,
+        totalCapacity: emergencyExits.length * 100,
+        operationalExits: emergencyExits.filter((e: any) => e.status === 'OPERATIONAL').length,
+        blockedExits: emergencyExits.filter((e: any) => e.status === 'BLOCKED_BY_FIRE').length,
+        lastUpdated: new Date().toISOString(),
+      };
+    } catch (error) {
+      console.error('Error fetching emergency exits:', error);
+      // Return empty result on error
+      return {
+        building: 'Unknown Building',
+        floors: 0,
+        emergencyExits: [],
+        totalCapacity: 0,
+        operationalExits: 0,
+        blockedExits: 0,
+        lastUpdated: new Date().toISOString(),
+        error: error.message,
+      };
+    }
   }
 
   @Post('hazard')
@@ -218,12 +260,38 @@ export class FireSafetyController {
   }
 
   // Return hazards (join to nodes for geometry)
+  // Accepts optional building_id query parameter to filter by building
+  // Only returns ACTIVE hazards (case-insensitive status check)
   @Get('hazards')
-  async getHazards() {
+  async getHazards(@Query('building_id') buildingId?: string) {
+    // Build WHERE clause - always filter for active hazards
+    // Add building_id filter if provided
+    const whereClause = buildingId
+      ? `WHERE LOWER(h.status) = 'active' AND f.building_id = ${parseInt(buildingId, 10)}`
+      : `WHERE LOWER(h.status) = 'active'`;
+
     const query = `
-      SELECT json_build_object('type','FeatureCollection','features', COALESCE(json_agg(json_build_object('type','Feature','geometry', ST_AsGeoJSON(ST_Transform(n.geometry,4326))::json,'properties', json_build_object('id', h.id, 'type', h.type, 'severity', h.severity, 'status', h.status))), '[]'::json)) AS geojson
+      SELECT json_build_object(
+        'type', 'FeatureCollection',
+        'features', COALESCE(json_agg(
+          json_build_object(
+            'type', 'Feature',
+            'geometry', ST_AsGeoJSON(ST_Transform(n.geometry, 4326))::json,
+            'properties', json_build_object(
+              'id', h.id,
+              'type', h.type,
+              'severity', h.severity,
+              'status', h.status,
+              'node_id', h.node_id,
+              'floor_id', n.floor_id
+            )
+          )
+        ) FILTER (WHERE h.id IS NOT NULL), '[]'::json)
+      ) AS geojson
       FROM hazards h
-      LEFT JOIN nodes n ON n.id = h.node_id;
+      LEFT JOIN nodes n ON n.id = h.node_id
+      LEFT JOIN floor f ON n.floor_id = f.id
+      ${whereClause};
     `;
     const res = await this.dataSource.query(query);
     return res && res[0]
@@ -232,11 +300,33 @@ export class FireSafetyController {
   }
 
   // Return nodes as GeoJSON features
+  // Accepts optional building_id query parameter to filter by building
   @Get('nodes')
-  async getNodes() {
+  async getNodes(@Query('building_id') buildingId?: string) {
+    // Build WHERE clause if building_id is provided
+    const whereClause = buildingId
+      ? `WHERE f.building_id = ${parseInt(buildingId, 10)}`
+      : '';
+
     const query = `
-      SELECT json_build_object('type','FeatureCollection','features', COALESCE(json_agg(json_build_object('type','Feature','geometry', ST_AsGeoJSON(ST_Transform(geometry,4326))::json,'properties', json_build_object('id', id, 'type', type))), '[]'::json)) AS geojson
-      FROM nodes;
+      SELECT json_build_object(
+        'type', 'FeatureCollection',
+        'features', COALESCE(json_agg(
+          json_build_object(
+            'type', 'Feature',
+            'geometry', ST_AsGeoJSON(ST_Transform(n.geometry, 4326))::json,
+            'properties', json_build_object(
+              'id', n.id,
+              'type', n.type,
+              'floor_id', n.floor_id,
+              'description', n.description
+            )
+          )
+        ), '[]'::json)
+      ) AS geojson
+      FROM nodes n
+      LEFT JOIN floor f ON n.floor_id = f.id
+      ${whereClause};
     `;
     const res = await this.dataSource.query(query);
     return res && res[0]
@@ -275,21 +365,50 @@ export class FireSafetyController {
   }
 
   // Return rooms as GeoJSON (join to room table)
+  // Includes node_id for each room (nearest navigation node) for route computation
+  // Accepts optional building_id query parameter to filter by building
   @Get('rooms')
-  async getRooms() {
+  async getRooms(@Query('building_id') buildingId?: string) {
+    // Build WHERE clause if building_id is provided
+    const whereClause = buildingId
+      ? `WHERE f.building_id = ${parseInt(buildingId, 10)}`
+      : '';
+
+    // Use CTEs to:
+    // 1. Deduplicate rooms by name per floor (keep first one by id)
+    // 2. Find nearest node for each unique room
     const query = `
+      WITH unique_rooms AS (
+        -- Deduplicate rooms by name per floor to avoid dropdown duplicates
+        SELECT DISTINCT ON (r.name, r.floor_id)
+          r.id, r.name, r.type, r.floor_id, r.geometry
+        FROM room r
+        ORDER BY r.name, r.floor_id, r.id ASC
+      ),
+      room_nodes AS (
+        SELECT DISTINCT ON (ur.id)
+          ur.id as room_id,
+          n.id as node_id
+        FROM unique_rooms ur
+        JOIN floor f ON ur.floor_id = f.id
+        JOIN nodes n ON n.floor_id = ur.floor_id
+        WHERE (ST_Intersects(n.geometry, ur.geometry) OR ST_DWithin(n.geometry, ur.geometry, 5))
+        ORDER BY ur.id, ST_Distance(n.geometry, ST_Centroid(ur.geometry)) ASC
+      )
       SELECT json_build_object(
         'type', 'FeatureCollection',
         'features', COALESCE(json_agg(
           json_build_object(
             'type', 'Feature',
-            'geometry', ST_AsGeoJSON(ST_Transform(r.geometry, 4326))::json,
+            'geometry', ST_AsGeoJSON(ST_Transform(ur.geometry, 4326))::json,
             'properties', json_build_object(
-              'id', r.id,
-              'name', r.name,
-              'type', r.type,
+              'id', ur.id,
+              'name', ur.name || ' (F' || ur.floor_id || ')',
+              'type', ur.type,
+              'floor_id', ur.floor_id,
+              'node_id', rn.node_id,
               'address', COALESCE(f.level::text, '0'),
-              'color', CASE r.type
+              'color', CASE ur.type
                 WHEN 'bedroom' THEN '#29B6F6'
                 WHEN 'bathroom' THEN '#26C6DA'
                 WHEN 'kitchen' THEN '#FF9800'
@@ -314,8 +433,10 @@ export class FireSafetyController {
           )
         ), '[]'::json)
       ) AS geojson
-      FROM room r
-      LEFT JOIN floor f ON r.floor_id = f.id;
+      FROM unique_rooms ur
+      LEFT JOIN floor f ON ur.floor_id = f.id
+      LEFT JOIN room_nodes rn ON ur.id = rn.room_id
+      ${whereClause};
     `;
     const res = await this.dataSource.query(query);
     return res && res[0]
@@ -323,108 +444,29 @@ export class FireSafetyController {
       : { type: 'FeatureCollection', features: [] };
   }
 
-  // Get room-to-node mapping for navigation
-  // Door markers are placed at room BOUNDARIES (where rooms touch) not at room centers
+  // Get room-to-node mapping for navigation and fire placement
+  // Maps each room to the nearest navigation node inside or intersecting that room
   @Get('room-nodes')
   async getRoomNodes() {
     try {
-      // Compute door positions from room boundary intersections
-      // Find where rooms share boundaries and place markers there
+      // Find the nearest node for each room (node inside room or closest to room centroid)
       const query = `
-        WITH room_boundaries AS (
-          -- Find all room pairs that share a boundary (door locations)
-          SELECT
-            r1.id as room_id,
-            r1.name as room_name,
-            r2.id as adjacent_room_id,
-            r2.name as adjacent_room_name,
-            f.level as floor_level,
-            -- The door position is the centroid of the shared boundary
-            ST_Centroid(ST_Intersection(r1.geometry, r2.geometry)) as door_geometry
-          FROM room r1
-          JOIN room r2 ON r1.id < r2.id
-            AND r1.floor_id = r2.floor_id
-            AND ST_Touches(r1.geometry, r2.geometry)
-          JOIN floor f ON r1.floor_id = f.id
-        ),
-        room_door_positions AS (
-          -- For each room, get all its door positions with type determination
-          SELECT DISTINCT ON (room_id)
-            room_id,
-            room_name,
-            floor_level,
-            ST_X(ST_Transform(door_geometry, 4326)) as longitude,
-            ST_Y(ST_Transform(door_geometry, 4326)) as latitude,
-            adjacent_room_name,
-            -- Determine door type based on room names and connections
-            CASE
-              WHEN LOWER(room_name) LIKE '%stair%' OR LOWER(adjacent_room_name) LIKE '%stair%'
-                   OR LOWER(room_name) LIKE '%basement%' OR LOWER(adjacent_room_name) LIKE '%basement%' THEN 'stairs'
-              WHEN LOWER(room_name) LIKE '%foyer%' OR LOWER(room_name) LIKE '%entry%'
-                   OR LOWER(room_name) LIKE '%porch%' OR LOWER(room_name) LIKE '%vestibule%' THEN 'entry'
-              WHEN LOWER(adjacent_room_name) LIKE '%foyer%' OR LOWER(adjacent_room_name) LIKE '%entry%'
-                   OR LOWER(adjacent_room_name) LIKE '%porch%' THEN 'entry'
-              WHEN LOWER(room_name) LIKE '%garage%' OR LOWER(adjacent_room_name) LIKE '%garage%' THEN 'exit'
-              WHEN LOWER(room_name) LIKE '%hall%' OR LOWER(adjacent_room_name) LIKE '%hall%' THEN 'doorway'
-              ELSE 'doorway'
-            END as node_type,
-            -- Priority for DISTINCT ON selection: prefer entry/exit connections
-            CASE
-              WHEN LOWER(adjacent_room_name) LIKE '%foyer%' OR LOWER(adjacent_room_name) LIKE '%entry%' THEN 1
-              WHEN LOWER(adjacent_room_name) LIKE '%hall%' THEN 2
-              WHEN LOWER(adjacent_room_name) LIKE '%stair%' OR LOWER(adjacent_room_name) LIKE '%basement%' THEN 3
-              ELSE 4
-            END as priority
-          FROM room_boundaries
-          UNION ALL
-          -- Also include the adjacent room's perspective
-          SELECT DISTINCT ON (adjacent_room_id)
-            adjacent_room_id as room_id,
-            adjacent_room_name as room_name,
-            floor_level,
-            ST_X(ST_Transform(door_geometry, 4326)) as longitude,
-            ST_Y(ST_Transform(door_geometry, 4326)) as latitude,
-            room_name as adjacent_room_name,
-            CASE
-              WHEN LOWER(adjacent_room_name) LIKE '%stair%' OR LOWER(room_name) LIKE '%stair%'
-                   OR LOWER(adjacent_room_name) LIKE '%basement%' OR LOWER(room_name) LIKE '%basement%' THEN 'stairs'
-              WHEN LOWER(adjacent_room_name) LIKE '%foyer%' OR LOWER(adjacent_room_name) LIKE '%entry%'
-                   OR LOWER(adjacent_room_name) LIKE '%porch%' THEN 'entry'
-              WHEN LOWER(room_name) LIKE '%foyer%' OR LOWER(room_name) LIKE '%entry%'
-                   OR LOWER(room_name) LIKE '%porch%' THEN 'entry'
-              WHEN LOWER(adjacent_room_name) LIKE '%garage%' OR LOWER(room_name) LIKE '%garage%' THEN 'exit'
-              WHEN LOWER(adjacent_room_name) LIKE '%hall%' OR LOWER(room_name) LIKE '%hall%' THEN 'doorway'
-              ELSE 'doorway'
-            END as node_type,
-            CASE
-              WHEN LOWER(room_name) LIKE '%foyer%' OR LOWER(room_name) LIKE '%entry%' THEN 1
-              WHEN LOWER(room_name) LIKE '%hall%' THEN 2
-              WHEN LOWER(room_name) LIKE '%stair%' OR LOWER(room_name) LIKE '%basement%' THEN 3
-              ELSE 4
-            END as priority
-          FROM room_boundaries
-        ),
-        final_positions AS (
-          SELECT DISTINCT ON (room_id)
-            room_id,
-            room_name,
-            floor_level,
-            longitude,
-            latitude,
-            node_type
-          FROM room_door_positions
-          ORDER BY room_id, priority ASC
-        )
-        SELECT
-          room_id,
-          room_name,
-          room_id as node_id,  -- Use room_id as pseudo node_id
-          node_type,
-          floor_level,
-          longitude,
-          latitude
-        FROM final_positions
-        ORDER BY floor_level, room_id;
+        SELECT DISTINCT ON (r.id)
+          r.id as room_id,
+          r.name as room_name,
+          n.id as node_id,
+          n.type as node_type,
+          f.level as floor_level,
+          ST_X(ST_Transform(n.geometry, 4326)) as longitude,
+          ST_Y(ST_Transform(n.geometry, 4326)) as latitude
+        FROM room r
+        JOIN floor f ON r.floor_id = f.id
+        JOIN nodes n ON n.floor_id = r.floor_id
+        WHERE
+          -- Node is inside the room OR node intersects room geometry
+          ST_Intersects(n.geometry, r.geometry)
+          OR ST_DWithin(n.geometry, r.geometry, 5)  -- Within 5 meters
+        ORDER BY r.id, ST_Distance(n.geometry, ST_Centroid(r.geometry)) ASC;
       `;
       const result = await this.dataSource.query(query);
       return result;
@@ -491,18 +533,132 @@ export class FireSafetyController {
   }
 
   /**
+   * POST /fireSafety/place-fires-simple
+   * Simplified endpoint to place multiple fires by node IDs only
+   * Much easier for frontend to use
+   */
+  @Post('place-fires-simple')
+  async placeFiresSimple(
+    @Body() body: { nodeIds: number[]; severity?: string; type?: string },
+  ) {
+    try {
+      const { nodeIds, severity = 'high', type = 'fire' } = body;
+
+      if (!nodeIds || !Array.isArray(nodeIds) || nodeIds.length === 0) {
+        throw new BadRequestException('nodeIds array is required');
+      }
+
+      const hazardIds = [];
+
+      for (const nodeId of nodeIds) {
+        // Get apartment_id for the node
+        const apartmentResult = await this.dataSource.query(
+          `SELECT apartment_id FROM nodes WHERE id = $1`,
+          [nodeId],
+        );
+
+        const apartmentId = apartmentResult?.[0]?.apartment_id || null;
+
+        // Insert hazard record
+        const result = await this.dataSource.query(
+          `INSERT INTO hazards (node_id, type, severity, status, apartment_id, created_at, updated_at)
+           VALUES ($1, $2, $3, 'active', $4, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+           RETURNING id`,
+          [nodeId, type, severity.toLowerCase(), apartmentId],
+        );
+
+        if (result?.[0]) {
+          hazardIds.push(result[0].id);
+        }
+      }
+
+      return {
+        success: true,
+        message: `${hazardIds.length} fire(s) placed successfully`,
+        hazardIds,
+        count: hazardIds.length,
+      };
+    } catch (error) {
+      console.error('Error placing fires:', error);
+      throw new BadRequestException(`Failed to place fires: ${error.message}`);
+    }
+  }
+
+  /**
+   * POST /fireSafety/place-fire-room
+   * Place fire by room ID - finds the node inside the room
+   */
+  @Post('place-fire-room')
+  async placeFireByRoom(
+    @Body() body: { roomIds: number[]; severity?: string },
+  ) {
+    try {
+      const { roomIds, severity = 'high' } = body;
+
+      if (!roomIds || !Array.isArray(roomIds) || roomIds.length === 0) {
+        throw new BadRequestException('roomIds array is required');
+      }
+
+      const hazardIds = [];
+      const placedRooms = [];
+
+      for (const roomId of roomIds) {
+        // Find the node inside this room
+        const nodeResult = await this.dataSource.query(
+          `SELECT n.id as node_id, n.apartment_id, r.name as room_name
+           FROM room r
+           JOIN nodes n ON ST_Contains(r.geometry, n.geometry)
+           WHERE r.id = $1 AND n.type = 'room'
+           LIMIT 1`,
+          [roomId],
+        );
+
+        if (!nodeResult?.[0]) {
+          console.warn(`No node found for room ${roomId}`);
+          continue;
+        }
+
+        const { node_id, apartment_id, room_name } = nodeResult[0];
+
+        // Insert hazard record
+        const result = await this.dataSource.query(
+          `INSERT INTO hazards (node_id, type, severity, status, apartment_id, room_id, created_at, updated_at)
+           VALUES ($1, 'fire', $2, 'active', $3, $4, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+           RETURNING id`,
+          [node_id, severity.toLowerCase(), apartment_id, roomId],
+        );
+
+        if (result?.[0]) {
+          hazardIds.push(result[0].id);
+          placedRooms.push({ roomId, roomName: room_name, nodeId: node_id });
+        }
+      }
+
+      return {
+        success: true,
+        message: `${hazardIds.length} fire(s) placed successfully`,
+        hazardIds,
+        placedRooms,
+        count: hazardIds.length,
+      };
+    } catch (error) {
+      console.error('Error placing fires by room:', error);
+      throw new BadRequestException(`Failed to place fires: ${error.message}`);
+    }
+  }
+
+  /**
    * POST /fireSafety/clear-fires
-   * Clears all manual fire hazards (status = ACTIVE, type = manual_fire)
+   * Clears fire hazards. Use clearAll=true to clear ALL active hazards.
    */
   @Post('clear-fires')
-  async clearFires() {
+  async clearFires(@Body() body?: { clearAll?: boolean }) {
     try {
-      // Delete all active manual fires
-      const deleteQuery = `
-          DELETE FROM hazards 
-          WHERE type = 'manual_fire' AND status = 'ACTIVE'
-          RETURNING id
-        `;
+      // If clearAll is true, delete ALL active hazards regardless of type
+      // Otherwise, delete all fire-related types (fire, manual_fire, smoke)
+      const deleteQuery = body?.clearAll
+        ? `DELETE FROM hazards WHERE status = 'active' RETURNING id`
+        : `DELETE FROM hazards WHERE type IN ('fire', 'manual_fire', 'smoke') AND status = 'active' RETURNING id`;
 
       const result = await this.dataSource.query(deleteQuery);
       const deletedCount = result ? result.length : 0;

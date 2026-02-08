@@ -13,17 +13,30 @@ export class HazardService {
 
   async findAll(): Promise<hazards[]> {
     return this.hazardRepository.find({
-      relations: ['apartment', 'apartment.floor', 'apartment.floor.building', 'node'],
+      relations: ['apartment', 'apartment.floor', 'apartment.floor.building', 'node', 'room', 'floor', 'floor.building'],
       order: { created_at: 'DESC' },
     });
   }
 
   async findActive(): Promise<hazards[]> {
     return this.hazardRepository.find({
-      where: { status: In(['ACTIVE', 'RESPONDED', 'RESPONDING', 'REPORTED']) },
-      relations: ['apartment', 'apartment.floor', 'apartment.floor.building', 'node'],
+      where: { status: In(['active', 'responded', 'pending']) },
+      relations: ['apartment', 'apartment.floor', 'apartment.floor.building', 'node', 'room', 'floor', 'floor.building'],
       order: { created_at: 'DESC' },
     });
+  }
+
+  async findByBuilding(buildingId: number): Promise<hazards[]> {
+    return this.hazardRepository
+      .createQueryBuilder('hazard')
+      .leftJoinAndSelect('hazard.node', 'node')
+      .leftJoinAndSelect('hazard.room', 'room')
+      .leftJoinAndSelect('hazard.floor', 'floor')
+      .leftJoinAndSelect('floor.building', 'building')
+      .where('floor.building_id = :buildingId', { buildingId })
+      .andWhere('hazard.status IN (:...statuses)', { statuses: ['active', 'responded', 'pending'] })
+      .orderBy('hazard.created_at', 'DESC')
+      .getMany();
   }
 
   async findOne(id: number): Promise<hazards> {
@@ -40,13 +53,28 @@ export class HazardService {
   }
 
   async create(createHazardDto: CreateHazardDto): Promise<hazards> {
-    const hazard = this.hazardRepository.create({
+    // Build hazard object with only provided fields
+    const hazardData: Partial<hazards> = {
       type: createHazardDto.type,
-      apartment: { id: createHazardDto.apartmentId } as any,
-      node: { id: createHazardDto.nodeId } as any,
       severity: createHazardDto.severity,
       status: createHazardDto.status,
-    });
+    };
+
+    // Only set relations if IDs are provided
+    if (createHazardDto.apartmentId) {
+      hazardData.apartmentId = createHazardDto.apartmentId;
+    }
+    if (createHazardDto.nodeId) {
+      hazardData.nodeId = createHazardDto.nodeId;
+    }
+    if (createHazardDto.roomId) {
+      hazardData.roomId = createHazardDto.roomId;
+    }
+    if (createHazardDto.floorId) {
+      hazardData.floorId = createHazardDto.floorId;
+    }
+
+    const hazard = this.hazardRepository.create(hazardData);
     return this.hazardRepository.save(hazard);
   }
 
