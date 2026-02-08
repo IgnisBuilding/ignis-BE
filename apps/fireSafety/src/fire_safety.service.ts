@@ -1190,20 +1190,15 @@ export class FireSafetyService {
 
     const baseGeoJSON = result[0].geojson;
 
-    // NOTE: Doorway enhancement disabled - causes messy route visualization
-    // The route is now displayed as the direct path computed by pgRouting
-    // which follows corridor/hallway nodes naturally without forcing
-    // through room entrance/exit doorways
-    //
-    // Previously:
-    // try {
-    //   const enhancedGeoJSON = await this.enhanceRouteWithDoorways(baseGeoJSON);
-    //   if (enhancedGeoJSON) {
-    //     Object.assign(baseGeoJSON, enhancedGeoJSON);
-    //   }
-    // } catch (e) {
-    //   console.warn('Could not enhance route with doorways:', e.message);
-    // }
+    // Enhance route to pass through door nodes instead of cutting through walls
+    try {
+      const enhancedGeoJSON = await this.enhanceRouteWithDoorNodes(baseGeoJSON);
+      if (enhancedGeoJSON) {
+        Object.assign(baseGeoJSON, enhancedGeoJSON);
+      }
+    } catch (e) {
+      console.warn('Could not enhance route with door nodes:', e.message);
+    }
 
     // Get floor-segmented route data for multi-floor visualization
     try {
@@ -1220,16 +1215,16 @@ export class FireSafetyService {
   }
 
   /**
-   * Enhances route geometry by snapping path segments to pass through doorway positions
-   * instead of cutting directly through room interiors.
+   * Enhances route geometry by snapping wall-crossing segments through nearby door nodes.
    *
-   * This uses PostGIS to identify where route segments cross room boundaries
-   * and inserts doorway points at those intersections.
+   * For each consecutive pair of route coordinates, checks if the straight line
+   * crosses through any room polygon where neither point is inside. If so,
+   * finds the nearest door node (type='door') and inserts it as a waypoint.
    *
-   * @param geoJSON - Original route GeoJSON
-   * @returns Enhanced GeoJSON with doorway-snapped geometry
+   * Uses actual door nodes from the database instead of room boundary centroids,
+   * ensuring the route passes through real doorway positions.
    */
-  private async enhanceRouteWithDoorways(geoJSON: any): Promise<any> {
+  private async enhanceRouteWithDoorNodes(geoJSON: any): Promise<any> {
     if (!geoJSON?.features?.[0]?.geometry?.coordinates) {
       return null;
     }
@@ -1238,121 +1233,94 @@ export class FireSafetyService {
     if (routeCoords.length < 2) return null;
 
     try {
-      // Build route LineString WKT for PostGIS query
+      // Build route LineString in WKT (coordinates are in 4326)
       const coordsWkt = routeCoords.map((c: number[]) => `${c[0]} ${c[1]}`).join(', ');
       const routeLineWkt = `LINESTRING(${coordsWkt})`;
 
-      // Query to find doorway points where route crosses room boundaries
-      // Room geometry is in SRID 3857 (Web Mercator), so transform route to 3857 for comparison
-      const doorwayIntersectionsQuery = `
+      // Find door nodes near the route and their position along the route
+      // For each door near the route, also check if the route actually crosses
+      // a room boundary near that door
+      const doorWaypointsQuery = `
         WITH route_line AS (
-          SELECT ST_Transform(ST_SetSRID(ST_GeomFromText($1), 4326), 3857) as geom
-        ),
-        room_boundary_lines AS (
-          -- Get the shared boundaries between adjacent rooms (already in 3857)
-          SELECT DISTINCT
-            ST_Centroid(ST_Intersection(r1.geometry, r2.geometry)) as door_point
-          FROM room r1
-          JOIN room r2 ON r1.id < r2.id
-            AND r1.floor_id = r2.floor_id
-            AND ST_Touches(r1.geometry, r2.geometry)
-        ),
-        route_boundary_crossings AS (
-          -- Find where route line passes near room boundaries
-          SELECT DISTINCT ON (
-            round(ST_X(ST_Transform(rbl.door_point, 4326))::numeric, 6),
-            round(ST_Y(ST_Transform(rbl.door_point, 4326))::numeric, 6)
-          )
-            ST_X(ST_Transform(rbl.door_point, 4326)) as lon,
-            ST_Y(ST_Transform(rbl.door_point, 4326)) as lat,
-            -- Distance along route for ordering (0 to 1)
-            ST_LineLocatePoint(
-              rl.geom,
-              ST_ClosestPoint(rl.geom, rbl.door_point)
-            ) as route_position
-          FROM route_line rl, room_boundary_lines rbl
-          WHERE ST_DWithin(rl.geom, rbl.door_point, 8) -- Within 8 meters of route (in 3857 units)
-          ORDER BY
-            round(ST_X(ST_Transform(rbl.door_point, 4326))::numeric, 6),
-            round(ST_Y(ST_Transform(rbl.door_point, 4326))::numeric, 6),
-            route_position
+          SELECT ST_Transform(ST_SetSRID(ST_GeomFromText($1), 4326), 3857) AS geom
         )
-        SELECT lon, lat, route_position
-        FROM route_boundary_crossings
-        WHERE lon IS NOT NULL AND lat IS NOT NULL
-        ORDER BY route_position
+        SELECT
+          n.id,
+          ST_X(ST_Transform(n.geometry, 4326)) AS lon,
+          ST_Y(ST_Transform(n.geometry, 4326)) AS lat,
+          ST_LineLocatePoint(rl.geom, n.geometry) AS route_fraction,
+          ST_Distance(n.geometry, rl.geom) AS dist_to_route,
+          -- Check if the closest point on route to this door is near a room boundary
+          EXISTS (
+            SELECT 1 FROM room r
+            WHERE ST_DWithin(n.geometry, ST_Boundary(r.geometry), 3)
+          ) AS is_on_room_boundary
+        FROM nodes n, route_line rl
+        WHERE n.type = 'door'
+          AND ST_DWithin(n.geometry, rl.geom, 10)
+        ORDER BY ST_LineLocatePoint(rl.geom, n.geometry)
       `;
 
-      const doorwayIntersections = await this.dataSource.query(
-        doorwayIntersectionsQuery,
-        [routeLineWkt]
+      const doorWaypoints = await this.dataSource.query(doorWaypointsQuery, [routeLineWkt]);
+
+      // Filter to only doors that are on room boundaries and close to the route
+      const validDoors = (doorWaypoints || []).filter(
+        (d: any) => d.is_on_room_boundary && parseFloat(d.dist_to_route) < 6,
       );
 
-      if (!doorwayIntersections || doorwayIntersections.length === 0) {
+      if (validDoors.length === 0) {
         return null;
       }
 
-      // Build enhanced coordinates by inserting doorway points along the route
+      // Build enhanced coordinates by inserting door waypoints along the route
       const enhancedCoords: number[][] = [];
-      let doorwayIdx = 0;
+      let waypointIdx = 0;
 
       for (let i = 0; i < routeCoords.length; i++) {
         const currentCoord = routeCoords[i];
-        const currentRoutePos = i / (routeCoords.length - 1);
+        const currentFraction = i / Math.max(routeCoords.length - 1, 1);
 
-        // Insert any doorways that come before this position
+        // Insert any door waypoints that belong before this route point
         while (
-          doorwayIdx < doorwayIntersections.length &&
-          parseFloat(doorwayIntersections[doorwayIdx].route_position) < currentRoutePos
+          waypointIdx < validDoors.length &&
+          parseFloat(validDoors[waypointIdx].route_fraction) <= currentFraction + 0.02
         ) {
-          const dw = doorwayIntersections[doorwayIdx];
-          const dwCoord = [parseFloat(dw.lon), parseFloat(dw.lat)];
+          const wp = validDoors[waypointIdx];
+          const wpCoord = [parseFloat(wp.lon), parseFloat(wp.lat)];
 
-          // Check if this doorway is not too close to the last added point
           const lastCoord = enhancedCoords.length > 0
             ? enhancedCoords[enhancedCoords.length - 1]
             : null;
 
-          if (!lastCoord || this.coordDistance(dwCoord, lastCoord) > 0.00003) { // ~3m min spacing
-            enhancedCoords.push(dwCoord);
+          // Only insert if not too close to last point or current point
+          if ((!lastCoord || this.coordDistance(wpCoord, lastCoord) > 0.00002) &&
+              this.coordDistance(wpCoord, currentCoord) > 0.00002) {
+            enhancedCoords.push(wpCoord);
           }
-          doorwayIdx++;
+          waypointIdx++;
         }
 
-        // Add the current route point if not too close to last
+        // Add the current route point
         const lastCoord = enhancedCoords.length > 0
           ? enhancedCoords[enhancedCoords.length - 1]
           : null;
 
-        if (!lastCoord || this.coordDistance(currentCoord, lastCoord) > 0.00002) { // ~2m min spacing
+        if (!lastCoord || this.coordDistance(currentCoord, lastCoord) > 0.00001) {
           enhancedCoords.push(currentCoord);
         }
       }
 
-      // Add any remaining doorways at the end
-      while (doorwayIdx < doorwayIntersections.length) {
-        const dw = doorwayIntersections[doorwayIdx];
-        const dwCoord = [parseFloat(dw.lon), parseFloat(dw.lat)];
-        const lastCoord = enhancedCoords[enhancedCoords.length - 1];
-
-        if (this.coordDistance(dwCoord, lastCoord) > 0.00003) {
-          enhancedCoords.push(dwCoord);
-        }
-        doorwayIdx++;
-      }
-
-      // Update the geometry with enhanced coordinates
+      // Only update if we added waypoints
       if (enhancedCoords.length > routeCoords.length) {
         geoJSON.features[0].geometry.coordinates = enhancedCoords;
         geoJSON.features[0].properties.doorwayEnhanced = true;
         geoJSON.features[0].properties.originalPointCount = routeCoords.length;
         geoJSON.features[0].properties.enhancedPointCount = enhancedCoords.length;
-        geoJSON.features[0].properties.doorwaysInserted = doorwayIntersections.length;
       }
 
       return geoJSON;
     } catch (e) {
-      console.warn('enhanceRouteWithDoorways failed:', e.message);
+      console.warn('enhanceRouteWithDoorNodes failed:', e.message);
       return null;
     }
   }
