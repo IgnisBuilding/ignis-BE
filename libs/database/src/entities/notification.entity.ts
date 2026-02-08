@@ -6,18 +6,27 @@ export class Notification {
   @PrimaryGeneratedColumn()
   id: number;
 
-  @Column({ name: 'user_id' })
-  userId: number;
+  @Column({ name: 'user_id', nullable: true })
+  userId: number | null;
 
-  @ManyToOne(() => User, { nullable: false })
+  @ManyToOne(() => User, { nullable: true })
   @JoinColumn({ name: 'user_id' })
   user: User;
+
+  @Column({ default: 'Notification' })
+  title: string;
 
   @Column()
   type: string;
 
   @Column({ type: 'text' })
   message: string;
+
+  @Column({ default: 'medium' })
+  priority: string;
+
+  @Column({ name: 'role_target', nullable: true })
+  roleTarget: string | null;
 
   @Column({ type: 'varchar', default: 'unread' })
   status: string;

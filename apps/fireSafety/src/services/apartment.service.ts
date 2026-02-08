@@ -100,6 +100,8 @@ export class ApartmentService {
       throw new NotFoundException('No apartment assigned to this user');
     }
 
+    const bld = apt.floor?.building;
+
     return {
       id: apt.id,
       unit_number: apt.unit_number,
@@ -108,22 +110,18 @@ export class ApartmentService {
         id: apt.floor?.id,
         name: apt.floor?.name || `Floor ${apt.floor?.level || 1}`,
         level: apt.floor?.level || 0,
-        building: apt.floor?.building ? {
-          id: apt.floor.building.id,
-          name: apt.floor.building.name || 'Unknown',
-          address: apt.floor.building.address || 'N/A',
-          type: apt.floor.building.type || 'residential',
-          has_floor_plan: (apt.floor.building as any).has_floor_plan || false,
-          center_lat: (apt.floor.building as any).center_lat,
-          center_lng: (apt.floor.building as any).center_lng,
-        } : undefined,
       },
       building: {
-        id: apt.floor?.building?.id,
-        name: apt.floor?.building?.name || 'Unknown',
-        address: apt.floor?.building?.address || 'N/A',
+        id: bld?.id,
+        name: bld?.name || 'Unknown',
+        address: bld?.address || 'N/A',
+        type: bld?.type || 'residential',
+        has_floor_plan: bld?.hasFloorPlan || false,
+        center_lat: bld?.centerLat ? Number(bld.centerLat) : undefined,
+        center_lng: bld?.centerLng ? Number(bld.centerLng) : undefined,
       },
       occupied: apt.occupied,
+      residents: 0,
       createdAt: apt.created_at,
       updatedAt: apt.updated_at,
     };
