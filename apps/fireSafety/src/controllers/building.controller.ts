@@ -1894,12 +1894,10 @@ export class BuildingController {
           ) OR floor_id = ANY($1)
         `, [floorIds]);
 
-        // 19. Detach users from apartments (FK → apartment)
+        // 19. Detach apartment owners before deleting apartments
         await queryRunner.query(`
-          UPDATE users SET apartment_id = NULL
-          WHERE apartment_id IN (
-            SELECT id FROM apartment WHERE floor_id = ANY($1)
-          )
+          UPDATE apartment SET owner_id = NULL
+          WHERE floor_id = ANY($1)
         `, [floorIds]);
 
         // 20. Delete apartments (FK → floor)

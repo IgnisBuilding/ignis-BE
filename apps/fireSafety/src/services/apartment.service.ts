@@ -22,29 +22,23 @@ export class ApartmentService {
       [email]
     );
 
-    // Get all apartments with owner_id
-    const apartmentsResult = await this.dataSource.query(
-      `SELECT a.id, a.unit_number, a.owner_id, a.occupied, a.floor_id, f.level as floor_level, b.name as building_name
-       FROM apartment a
-       LEFT JOIN floor f ON a.floor_id = f.id
-       LEFT JOIN building b ON f.building_id = b.id`
-    );
-
-    // Get apartments specifically for this user
+    // Get apartments owned by this user (via apartment.owner_id)
     const userApartments = userResult.length > 0
       ? await this.dataSource.query(
-          `SELECT a.id, a.unit_number, a.owner_id, a.occupied
-           FROM apartment a WHERE a.owner_id = $1`,
+          `SELECT a.id, a.unit_number, a.owner_id, a.occupied, f.level as floor_level, b.name as building_name
+           FROM apartment a
+           LEFT JOIN floor f ON a.floor_id = f.id
+           LEFT JOIN building b ON f.building_id = b.id
+           WHERE a.owner_id = $1`,
           [userResult[0]?.id]
         )
       : [];
 
     return {
       user: userResult[0] || null,
-      allApartments: apartmentsResult,
       userApartments: userApartments,
       message: userApartments.length > 0
-        ? 'User has apartments assigned'
+        ? 'User has apartments assigned via apartment.owner_id'
         : 'No apartments found for this user'
     };
   }
@@ -97,22 +91,33 @@ export class ApartmentService {
   }
 
   async findByUserId(userId: number): Promise<any> {
-    const user = await this.userRepository.findOne({
-      where: { id: userId },
-      relations: ['apartment', 'apartment.floor', 'apartment.floor.building'],
+    const apt = await this.apartmentRepository.findOne({
+      where: { ownerId: userId },
+      relations: ['floor', 'floor.building'],
     });
 
-    if (!user || !user.apartment) {
+    if (!apt) {
       throw new NotFoundException('No apartment assigned to this user');
     }
 
-    const apt = user.apartment;
-
     return {
       id: apt.id,
+      unit_number: apt.unit_number,
       number: apt.unit_number,
-      floor: apt.floor?.level || 0,
-      residents: 0,
+      floor: {
+        id: apt.floor?.id,
+        name: apt.floor?.name || `Floor ${apt.floor?.level || 1}`,
+        level: apt.floor?.level || 0,
+        building: apt.floor?.building ? {
+          id: apt.floor.building.id,
+          name: apt.floor.building.name || 'Unknown',
+          address: apt.floor.building.address || 'N/A',
+          type: apt.floor.building.type || 'residential',
+          has_floor_plan: (apt.floor.building as any).has_floor_plan || false,
+          center_lat: (apt.floor.building as any).center_lat,
+          center_lng: (apt.floor.building as any).center_lng,
+        } : undefined,
+      },
       building: {
         id: apt.floor?.building?.id,
         name: apt.floor?.building?.name || 'Unknown',
