@@ -24,7 +24,7 @@ export class DashboardController {
       this.sensorRepo.count({ where: { status: 'alert' } }),
       this.userRepo.count(),
       this.userRepo.count({ where: { isActive: true } }),
-      this.hazardsRepo.count({ where: { status: 'ACTIVE' } }),
+      this.hazardsRepo.count({ where: { status: 'active' } }),
       this.routeRepo.count(),
     ]);
     return {
@@ -40,7 +40,7 @@ export class DashboardController {
   async getRecentAlerts() {
     const [alertSensors, activeHazards] = await Promise.all([
       this.sensorRepo.find({ where: { status: 'alert' }, relations: ['room'], order: { lastReading: 'DESC' }, take: 10 }),
-      this.hazardsRepo.find({ where: { status: 'ACTIVE' }, order: { created_at: 'DESC' }, take: 10 }),
+      this.hazardsRepo.find({ where: { status: 'active' }, order: { created_at: 'DESC' }, take: 10 }),
     ]);
     return { sensors: alertSensors, hazards: activeHazards };
   }

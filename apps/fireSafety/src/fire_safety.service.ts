@@ -326,14 +326,14 @@ export class FireSafetyService {
         FROM hazards h
         JOIN nodes n ON h.node_id = n.id
         LEFT JOIN room r ON ST_Intersects(n.geometry, r.geometry)
-        WHERE h.status = 'ACTIVE'
+        WHERE h.status = 'active'
       ),
       blocked_nodes AS (
         -- Get all nodes inside fire rooms OR directly marked as fire
         SELECT DISTINCT n.id
         FROM nodes n
         LEFT JOIN fire_rooms fr ON ST_Within(n.geometry, fr.room_geom)
-        LEFT JOIN hazards h ON n.id = h.node_id AND h.status = 'ACTIVE'
+        LEFT JOIN hazards h ON n.id = h.node_id AND h.status = 'active'
         WHERE fr.room_geom IS NOT NULL OR h.id IS NOT NULL
       )
       SELECT id FROM blocked_nodes;
@@ -348,7 +348,7 @@ export class FireSafetyService {
       console.warn('Failed to get blocked nodes, falling back to hazard nodes only:', error.message);
       // Fallback to just hazard nodes
       const fallbackResult = await this.dataSource.query(
-        `SELECT DISTINCT node_id as id FROM hazards WHERE status = 'ACTIVE' AND node_id IS NOT NULL`
+        `SELECT DISTINCT node_id as id FROM hazards WHERE status = 'active' AND node_id IS NOT NULL`
       );
       return fallbackResult.map((r: any) => r.id as number);
     }
@@ -380,11 +380,11 @@ export class FireSafetyService {
         FROM hazards h
         JOIN nodes hn ON h.node_id = hn.id
         JOIN room r ON ST_Intersects(hn.geometry, r.geometry)
-        WHERE h.status = 'ACTIVE'
+        WHERE h.status = 'active'
           -- Don't consider hallways/passages as fire rooms
           AND r.name NOT ILIKE ANY(ARRAY['%hall%', '%corridor%', '%passage%', '%foyer%', '%lobby%', '%stoop%'])
       ) fire_rooms ON ST_Intersects(n.geometry, fire_rooms.room_geom)
-      LEFT JOIN hazards h ON n.id = h.node_id AND h.status = 'ACTIVE'
+      LEFT JOIN hazards h ON n.id = h.node_id AND h.status = 'active'
       WHERE
         -- Block the hazard node itself
         h.id IS NOT NULL
@@ -400,12 +400,15 @@ export class FireSafetyService {
    * through immediately adjacent areas that would be in the danger zone
    */
   private getFireRoomGeometriesSQL(): string {
+    // Use room geometry directly without buffer for edge blocking
+    // Buffer was causing edges from adjacent rooms to be blocked incorrectly
+    // Node blocking already handles nodes inside fire rooms
     return `
-      SELECT DISTINCT ST_Buffer(r.geometry, 3) as room_geom
+      SELECT DISTINCT r.geometry as room_geom
       FROM hazards h
       JOIN nodes hn ON h.node_id = hn.id
       JOIN room r ON ST_Intersects(hn.geometry, r.geometry)
-      WHERE h.status = 'ACTIVE'
+      WHERE h.status = 'active'
         AND r.name NOT ILIKE ANY(ARRAY['%hall%', '%corridor%', '%passage%', '%foyer%', '%lobby%', '%stoop%'])
     `;
   }
@@ -450,6 +453,7 @@ export class FireSafetyService {
     // TC_01 FIX: Allow routing FROM fire zone (person needs to escape)
     // TC_02 FIX: If end node is in fire, redirect to safe point instead of error
     const fireCheck = await this.checkNodesForFire([startNodeId, endNodeId]);
+    console.log(`[FireCheck] Checking nodes [${startNodeId}, ${endNodeId}], result:`, fireCheck);
 
     let effectiveEndNodeId = endNodeId;
     let endNodeInFire = false;
@@ -497,12 +501,15 @@ export class FireSafetyService {
 
         // If no safe point found, try to find nearest exit that's not in fire
         const alternateExit = await this.findNearestSafeExit(startNodeId);
+        console.log(`[FindExit] Alternate exit result:`, alternateExit);
         if (alternateExit) {
           effectiveEndNodeId = alternateExit.nodeId;
+          console.log(`[Redirect] Using alternate exit node ${effectiveEndNodeId} instead of fire zone ${endNodeId}`);
           this.logger.log(
             `Using alternate exit node ${effectiveEndNodeId} instead of fire zone ${endNodeId}`,
           );
         } else {
+          console.log(`[Redirect] No safe exit found - will proceed with isolation check`);
           // No alternatives - this will likely trigger isolation detection later
           this.logger.warn(
             `No safe alternatives found for fire zone destination ${endNodeId}`,
@@ -602,15 +609,28 @@ export class FireSafetyService {
     }
 
     // Save route to database
+    // Use effectiveEndNodeId (which may have been redirected from fire zone)
     const routeId = await this.saveRouteFromWkt(
       routeGeometry,
       startNodeId,
-      endNodeId,
+      effectiveEndNodeId,
       assignedTo,
     );
 
-    // Return as GeoJSON
-    return this.getRouteAsGeoJSON(routeId);
+    // Return as GeoJSON with redirect info if applicable
+    const routeResponse = await this.getRouteAsGeoJSON(routeId);
+
+    // Add redirect metadata if destination was changed due to fire
+    if (endNodeInFire && effectiveEndNodeId !== endNodeId) {
+      return {
+        ...routeResponse,
+        redirectedFromFireZone: true,
+        originalEndNode: endNodeId,
+        message: `Original destination (node ${endNodeId}) is in fire zone. Redirected to nearest safe exit (node ${effectiveEndNodeId}).`,
+      };
+    }
+
+    return routeResponse;
   }
 
   // ============================================
@@ -690,7 +710,7 @@ export class FireSafetyService {
           FROM hazards h
           JOIN nodes n_fire ON h.node_id = n_fire.id
           JOIN nodes n_source ON e.source_id = n_source.id
-          WHERE h.status = 'ACTIVE'
+          WHERE h.status = 'active'
         ) fire_distances ON true
         -- Exclude edges connected to ANY node inside fire room geometry
         -- EXCEPT: Allow edges DEPARTING from escape node (person fleeing fire)
@@ -723,7 +743,7 @@ export class FireSafetyService {
           FROM hazards h
           JOIN nodes n_fire ON h.node_id = n_fire.id
           JOIN nodes n_target ON e.target_id = n_target.id
-          WHERE h.status = 'ACTIVE'
+          WHERE h.status = 'active'
         ) fire_distances ON true
         -- For reverse edges, the "source" in pgRouting is actually target_id
         -- Allow edges where target_id (which becomes source in reverse) is the escape node
@@ -749,9 +769,9 @@ export class FireSafetyService {
         SELECT ST_AsText(ST_LineMerge(ST_Collect(e.geometry ORDER BY r.seq))) AS path_wkt
         FROM route r
         JOIN edges e ON e.id = (
-          CASE 
-            WHEN r.edge % 2 = 0 THEN (r.edge / 2) 
-            ELSE ((r.edge - 1) / 2) 
+          CASE
+            WHEN r.edge % 2 = 0 THEN (r.edge / 2)
+            ELSE ((r.edge - 1) / 2)
           END
         )
         WHERE r.edge <> -1;
@@ -888,9 +908,9 @@ export class FireSafetyService {
         SELECT ST_AsText(ST_LineMerge(ST_Collect(e.geometry ORDER BY r.seq))) AS path_wkt
         FROM route r
         JOIN edges e ON e.id = (
-          CASE 
-            WHEN r.edge % 2 = 0 THEN (r.edge / 2) 
-            ELSE ((r.edge - 1) / 2) 
+          CASE
+            WHEN r.edge % 2 = 0 THEN (r.edge / 2)
+            ELSE ((r.edge - 1) / 2)
           END
         )
         WHERE r.edge <> -1;
@@ -1079,7 +1099,7 @@ export class FireSafetyService {
     const query = `
       SELECT DISTINCT node_id 
       FROM hazards 
-      WHERE node_id = ANY($1::int[]) AND status = 'ACTIVE'
+      WHERE node_id = ANY($1::int[]) AND status = 'active'
     `;
 
     const result = await this.dataSource.query(query, [nodeIds]);
@@ -1652,7 +1672,7 @@ export class FireSafetyService {
     const fireNodesQuery = `
       SELECT DISTINCT node_id
       FROM hazards
-      WHERE status = 'ACTIVE' AND node_id IS NOT NULL
+      WHERE status = 'active' AND node_id IS NOT NULL
     `;
     const fireNodesResult = await this.dataSource.query(fireNodesQuery);
     const activeFireNodes = fireNodesResult.map((r: any) => r.node_id);
@@ -2091,7 +2111,7 @@ export class FireSafetyService {
           ST_Transform((SELECT geometry FROM nodes WHERE id = $1), 4326)::geography
         ) as distance
       FROM nodes n
-      WHERE n.type IN ('exit', 'emergency_exit', 'entry')
+      WHERE n.type IN ('exit', 'emergency_exit', 'entry', 'door', 'stairs', 'other')
         AND n.id NOT IN (${blockedNodesSQL})
       ORDER BY distance ASC
       LIMIT 5
