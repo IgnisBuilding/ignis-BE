@@ -32,6 +32,10 @@ import { fire_alert_config } from './entities/fire_alert_config.entity';
 import { SafePoint } from './entities/safe_point.entity';
 import { UserPosition } from './entities/user-position.entity';
 import { NavigationSession } from './entities/navigation-session.entity';
+import { Alert } from './entities/alert.entity';
+import { SafetyEquipment } from './entities/safety_equipment.entity';
+import { Fingerprint } from './entities/fingerprint.entity';
+import { UserSettings } from './entities/user-settings.entity';
 
 @Module({
   imports: [
@@ -77,6 +81,10 @@ import { NavigationSession } from './entities/navigation-session.entity';
         SafePoint,
         UserPosition,
         NavigationSession,
+        Alert,
+        SafetyEquipment,
+        Fingerprint,
+        UserSettings,
       ],
       synchronize: false,
       logging: true,

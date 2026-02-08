@@ -31,6 +31,8 @@ import {
   NavigationSession,
   SafePoint,
   Fingerprint,
+  Notification,
+  UserSettings,
 } from '@app/entities';
 import { AuthController } from './controllers/auth.controller';
 import { SensorController } from './controllers/sensor.controller';
@@ -46,7 +48,11 @@ import { FireDetectionController } from './controllers/fire-detection.controller
 import { FloorController } from './controllers/floor.controller';
 import { NavigationController } from './controllers/navigation.controller';
 import { FingerprintController } from './controllers/fingerprint.controller';
+import { SettingsController } from './controllers/settings.controller';
+import { NotificationController } from './controllers/notification.controller';
 import { FingerprintService } from './services/fingerprint.service';
+import { SettingsService } from './services/settings.service';
+import { NotificationService } from './services/notification.service';
 import { AuthService } from './services/auth.service';
 import { SensorService } from './services/sensor.service';
 import { AlertService } from './services/alert.service';
@@ -99,6 +105,8 @@ import { NavigationService } from './services/navigation.service';
       NavigationSession,
       SafePoint,
       Fingerprint,
+      Notification,
+      UserSettings,
     ]),
   ],
   controllers: [
@@ -117,6 +125,8 @@ import { NavigationService } from './services/navigation.service';
     FloorController,
     NavigationController,
     FingerprintController,
+    SettingsController,
+    NotificationController,
   ],
   providers: [
     FireSafetyService,
@@ -134,6 +144,8 @@ import { NavigationService } from './services/navigation.service';
     NavigationService,
     NavigationGateway,
     FingerprintService,
+    SettingsService,
+    NotificationService,
   ],
 })
 export class FireSafetyModule {}

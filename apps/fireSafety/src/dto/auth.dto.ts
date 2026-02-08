@@ -34,3 +34,28 @@ export class RegisterDto {
   @IsOptional()
   phone?: string;
 }
+
+export class UpdateProfileDto {
+  @IsString()
+  @IsOptional()
+  name?: string;
+
+  @IsString()
+  @IsOptional()
+  phone?: string;
+
+  @IsString()
+  @IsOptional()
+  emergencyContact?: string;
+}
+
+export class ChangePasswordDto {
+  @IsString()
+  @IsNotEmpty()
+  currentPassword: string;
+
+  @IsString()
+  @IsNotEmpty()
+  @MinLength(6)
+  newPassword: string;
+}
