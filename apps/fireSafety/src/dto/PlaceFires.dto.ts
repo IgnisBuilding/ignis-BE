@@ -32,9 +32,19 @@ class FireZoneDto {
 }
 
 /**
- * Severity levels for fire hazards
+ * Severity levels for fire hazards (must match database constraint)
  */
-const SEVERITY_LEVELS = ['HIGH', 'CRITICAL'] as const;
+const SEVERITY_LEVELS = ['low', 'medium', 'high', 'critical'] as const;
+
+/**
+ * Status values for hazards (must match database constraint)
+ */
+const STATUS_VALUES = ['active', 'responded', 'resolved', 'false_alarm', 'pending'] as const;
+
+/**
+ * Hazard types (must match database constraint)
+ */
+const HAZARD_TYPES = ['fire', 'smoke', 'gas_leak', 'structural', 'electrical', 'chemical', 'flood', 'other'] as const;
 
 /**
  * DTO for placing multiple fire zones
@@ -45,12 +55,12 @@ export class PlaceFiresDto {
   @Type(() => FireZoneDto)
   fireZones: FireZoneDto[];
 
-  @IsIn(SEVERITY_LEVELS, { message: 'severity must be either HIGH or CRITICAL' })
-  severity: 'HIGH' | 'CRITICAL';
+  @IsIn(SEVERITY_LEVELS, { message: 'severity must be one of: low, medium, high, critical' })
+  severity: 'low' | 'medium' | 'high' | 'critical';
 
-  @IsString()
-  type: string; // 'manual_fire'
+  @IsIn(HAZARD_TYPES, { message: 'type must be one of: fire, smoke, gas_leak, structural, electrical, chemical, flood, other' })
+  type: string;
 
-  @IsString()
-  status: string; // 'ACTIVE'
+  @IsIn(STATUS_VALUES, { message: 'status must be one of: active, responded, resolved, false_alarm, pending' })
+  status: string;
 }

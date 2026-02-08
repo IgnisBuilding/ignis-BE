@@ -29,3 +29,6 @@ export * from './fire_brigade_state.entity';
 export * from './fire_brigade.entity';
 export * from './employee.entity';
 export * from './safe_point.entity';
+export * from './user-position.entity';
+export * from './navigation-session.entity';
+export * from './fingerprint.entity';

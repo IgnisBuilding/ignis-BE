@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { JwtModule } from '@nestjs/jwt';
@@ -27,6 +27,10 @@ import {
   camera,
   fire_detection_log,
   fire_alert_config,
+  UserPosition,
+  NavigationSession,
+  SafePoint,
+  Fingerprint,
 } from '@app/entities';
 import { AuthController } from './controllers/auth.controller';
 import { SensorController } from './controllers/sensor.controller';
@@ -40,6 +44,9 @@ import { ApartmentController } from './controllers/apartment.controller';
 import { CameraController } from './controllers/camera.controller';
 import { FireDetectionController } from './controllers/fire-detection.controller';
 import { FloorController } from './controllers/floor.controller';
+import { NavigationController } from './controllers/navigation.controller';
+import { FingerprintController } from './controllers/fingerprint.controller';
+import { FingerprintService } from './services/fingerprint.service';
 import { AuthService } from './services/auth.service';
 import { SensorService } from './services/sensor.service';
 import { AlertService } from './services/alert.service';
@@ -51,6 +58,8 @@ import { FireDetectionService } from './services/fire-detection.service';
 import { IsolationDetectionService } from './isolation-detection.service';
 import { JwtStrategy } from './strategies/jwt.strategy';
 import { FireDetectionGateway } from './gateways/fire-detection.gateway';
+import { NavigationGateway } from './gateways/navigation.gateway';
+import { NavigationService } from './services/navigation.service';
 
 @Module({
   imports: [
@@ -86,6 +95,10 @@ import { FireDetectionGateway } from './gateways/fire-detection.gateway';
       camera,
       fire_detection_log,
       fire_alert_config,
+      UserPosition,
+      NavigationSession,
+      SafePoint,
+      Fingerprint,
     ]),
   ],
   controllers: [
@@ -102,6 +115,8 @@ import { FireDetectionGateway } from './gateways/fire-detection.gateway';
     CameraController,
     FireDetectionController,
     FloorController,
+    NavigationController,
+    FingerprintController,
   ],
   providers: [
     FireSafetyService,
@@ -116,6 +131,9 @@ import { FireDetectionGateway } from './gateways/fire-detection.gateway';
     CameraService,
     FireDetectionService,
     FireDetectionGateway,
+    NavigationService,
+    NavigationGateway,
+    FingerprintService,
   ],
 })
 export class FireSafetyModule {}

@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Patch, Delete, UseGuards, Param, ParseIntPipe, Body, Req, NotFoundException } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Delete, UseGuards, Param, ParseIntPipe, Body, Req, Query, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource } from 'typeorm';
 import { building, floor, apartment, Society, room, nodes, edges, Opening, OpeningRoom, camera, User } from '@app/entities';
@@ -44,6 +44,125 @@ export class BuildingController {
   @Public()
   findAll() {
     return this.buildingRepo.find({ order: { created_at: 'DESC' } });
+  }
+
+  /**
+   * Get buildings grouped by city and area for cascading selector (Android setup screen)
+   */
+  @Get('grouped')
+  @Public()
+  async getBuildingsGrouped() {
+    let buildings: any[];
+    try {
+      // Try with city/area columns (requires migration 1800000000037)
+      buildings = await this.dataSource.query(`
+        SELECT b.id, b.name, b.address, b.type,
+               COALESCE(b.city, 'Unknown') as city,
+               COALESCE(b.area, s.location, 'Unknown') as area,
+               b.center_lat, b.center_lng
+        FROM building b
+        LEFT JOIN society s ON b.society_id = s.id
+        ORDER BY city, area, b.name
+      `);
+    } catch {
+      // Fallback if city/area columns don't exist yet
+      buildings = await this.dataSource.query(`
+        SELECT b.id, b.name, b.address, b.type,
+               'Unknown' as city,
+               COALESCE(s.location, 'Unknown') as area,
+               b.center_lat, b.center_lng
+        FROM building b
+        LEFT JOIN society s ON b.society_id = s.id
+        ORDER BY area, b.name
+      `);
+    }
+
+    // Group by city, then by area
+    const cityMap: Record<string, Record<string, any[]>> = {};
+    for (const b of buildings) {
+      if (!cityMap[b.city]) cityMap[b.city] = {};
+      if (!cityMap[b.city][b.area]) cityMap[b.city][b.area] = [];
+      cityMap[b.city][b.area].push({
+        id: b.id,
+        name: b.name,
+        address: b.address,
+        type: b.type,
+        centerLat: b.center_lat,
+        centerLng: b.center_lng,
+      });
+    }
+
+    return {
+      cities: Object.entries(cityMap).map(([city, areas]) => ({
+        city,
+        areas: Object.entries(areas).map(([area, buildings]) => ({
+          area,
+          buildings,
+        })),
+      })),
+    };
+  }
+
+  /**
+   * Find nearest building to GPS coordinates (for Android auto-switching)
+   */
+  @Get('nearby')
+  @Public()
+  async findNearby(
+    @Query('lat') lat: string,
+    @Query('lng') lng: string,
+    @Query('radius') radius?: string,
+  ) {
+    const latitude = parseFloat(lat);
+    const longitude = parseFloat(lng);
+    const radiusMeters = parseFloat(radius || '100');
+
+    if (isNaN(latitude) || isNaN(longitude)) {
+      return { building: null };
+    }
+
+    // Use center_lat/center_lng for distance calculation (works even without geometry)
+    // Also try PostGIS geometry if available
+    const result = await this.dataSource.query(`
+      SELECT * FROM (
+        SELECT id, name, address, type, city, area, center_lat, center_lng,
+          CASE
+            WHEN geometry IS NOT NULL THEN
+              ST_Distance(
+                ST_Transform(geometry, 4326)::geography,
+                ST_SetSRID(ST_MakePoint($2, $1), 4326)::geography
+              )
+            ELSE
+              ST_Distance(
+                ST_SetSRID(ST_MakePoint(center_lng::float, center_lat::float), 4326)::geography,
+                ST_SetSRID(ST_MakePoint($2, $1), 4326)::geography
+              )
+          END as distance_meters
+        FROM building
+        WHERE center_lat IS NOT NULL AND center_lng IS NOT NULL
+      ) sub
+      WHERE distance_meters <= $3
+      ORDER BY distance_meters ASC
+      LIMIT 1
+    `, [latitude, longitude, radiusMeters]);
+
+    if (result.length === 0) {
+      return { building: null };
+    }
+
+    return {
+      building: {
+        id: result[0].id,
+        name: result[0].name,
+        address: result[0].address,
+        type: result[0].type,
+        city: result[0].city,
+        area: result[0].area,
+        centerLat: result[0].center_lat,
+        centerLng: result[0].center_lng,
+        distanceMeters: Math.round(result[0].distance_meters),
+      },
+    };
   }
 
   @Get('stats')
@@ -822,6 +941,18 @@ export class BuildingController {
       ORDER BY f.level, n.id
     `, [floorIds]);
 
+    // Get room-to-node mapping using spatial query (node inside or near room)
+    const roomNodesMapping = await this.dataSource.query(`
+      SELECT DISTINCT ON (r.id)
+        r.id as room_id,
+        n.id as node_id
+      FROM room r
+      JOIN nodes n ON n.floor_id = r.floor_id
+      WHERE r.floor_id = ANY($1)
+        AND (ST_Intersects(n.geometry, r.geometry) OR ST_DWithin(n.geometry, r.geometry, 5))
+      ORDER BY r.id, ST_Distance(n.geometry, ST_Centroid(r.geometry)) ASC
+    `, [floorIds]);
+
     // Get edges with geometry as GeoJSON
     const edgesRaw = await this.dataSource.query(`
       SELECT
@@ -850,6 +981,12 @@ export class BuildingController {
     // Build GeoJSON FeatureCollection
     const features = [];
 
+    // Build room_id -> node_id mapping from spatial query result
+    const roomToNodeMap = new Map<number, number>();
+    for (const mapping of roomNodesMapping) {
+      roomToNodeMap.set(mapping.room_id, mapping.node_id);
+    }
+
     // Add rooms as Polygon features
     for (const r of roomsRaw) {
       if (r.geometry) {
@@ -867,6 +1004,7 @@ export class BuildingController {
             centroid_lat: r.centroid_lat ? parseFloat(r.centroid_lat) : null,
             centroid_lng: r.centroid_lng ? parseFloat(r.centroid_lng) : null,
             floor_id: r.floor_id,
+            node_id: roomToNodeMap.get(r.id) || null,  // Add node_id for route computation
           },
           geometry: r.geometry,
         });
