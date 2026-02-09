@@ -1,7 +1,7 @@
 import { Injectable, NotFoundException, Logger, Inject, forwardRef, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, MoreThan } from 'typeorm';
-import { camera, fire_detection_log, fire_alert_config, hazards } from '@app/entities';
+import { camera, fire_detection_log, fire_alert_config, hazards, nodes } from '@app/entities';
 import {
   FireDetectionAlertDto,
   FireDetectionAlertResponseDto,
@@ -31,6 +31,8 @@ export class FireDetectionService implements OnModuleInit, OnModuleDestroy {
     private fireAlertConfigRepository: Repository<fire_alert_config>,
     @InjectRepository(hazards)
     private hazardRepository: Repository<hazards>,
+    @InjectRepository(nodes)
+    private nodesRepository: Repository<nodes>,
     @Inject(forwardRef(() => FireDetectionGateway))
     private readonly fireDetectionGateway: FireDetectionGateway,
   ) {}
@@ -302,6 +304,20 @@ export class FireDetectionService implements OnModuleInit, OnModuleDestroy {
   private async createFireHazard(cam: camera, confidence: number): Promise<hazards> {
     const severity = confidence >= 0.9 ? 'critical' : confidence >= 0.8 ? 'high' : 'medium';
 
+    // Resolve node_id: use camera's nodeId, or look up a node in the camera's room
+    let nodeId = cam.nodeId ?? undefined;
+    if (!nodeId && cam.room_id) {
+      const roomNode = await this.nodesRepository.findOne({
+        where: { room_id: cam.room_id },
+      });
+      if (roomNode) {
+        nodeId = roomNode.id;
+        this.logger.log(`Resolved node_id ${nodeId} from room_id ${cam.room_id} for camera ${cam.camera_id}`);
+      } else {
+        this.logger.warn(`No node found for room_id ${cam.room_id} (camera ${cam.camera_id}) - hazard will have no node_id`);
+      }
+    }
+
     const hazard = this.hazardRepository.create({
       type: 'fire',
       severity: severity,
@@ -310,7 +326,7 @@ export class FireDetectionService implements OnModuleInit, OnModuleDestroy {
       // Include location data from camera for evacuation routing
       roomId: cam.room_id ?? undefined,
       floorId: cam.floor_id ?? undefined,
-      nodeId: cam.nodeId ?? undefined,
+      nodeId: nodeId,
     });
 
     return this.hazardRepository.save(hazard);

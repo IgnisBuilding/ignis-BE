@@ -900,13 +900,15 @@ export class BuildingController {
     }
 
     // Get rooms with geometry as GeoJSON (including new fields)
+    // LEFT JOIN nodes to include the routing node_id for each room
     const roomsRaw = await this.dataSource.query(`
       SELECT
         r.id, r.name, r.type, r.floor_id, r.color, r.area_sqm, r.capacity,
         f.level as floor_level,
         ST_AsGeoJSON(ST_Transform(r.geometry, 4326))::json as geometry,
         ST_Y(ST_Transform(r.centroid, 4326)) as centroid_lat,
-        ST_X(ST_Transform(r.centroid, 4326)) as centroid_lng
+        ST_X(ST_Transform(r.centroid, 4326)) as centroid_lng,
+        (SELECT n.id FROM nodes n WHERE n.room_id = r.id LIMIT 1) as node_id
       FROM room r
       JOIN floor f ON r.floor_id = f.id
       WHERE r.floor_id = ANY($1)
@@ -1004,7 +1006,7 @@ export class BuildingController {
             centroid_lat: r.centroid_lat ? parseFloat(r.centroid_lat) : null,
             centroid_lng: r.centroid_lng ? parseFloat(r.centroid_lng) : null,
             floor_id: r.floor_id,
-            node_id: roomToNodeMap.get(r.id) || null,  // Add node_id for route computation
+            node_id: r.node_id || roomToNodeMap.get(r.id) || null,  // Prefer FK lookup, fall back to spatial query
           },
           geometry: r.geometry,
         });
@@ -1103,6 +1105,18 @@ export class BuildingController {
         });
       }
     }
+
+    // Debug logging for floor plan data
+    const featuresByType = { rooms: 0, openings: 0, nodes: 0, edges: 0, cameras: 0 };
+    for (const f of features) {
+      if (f.properties?.room_type && !f.properties?.type) featuresByType.rooms++;
+      else if (f.properties?.type === 'opening') featuresByType.openings++;
+      else if (f.properties?.type === 'node') featuresByType.nodes++;
+      else if (f.properties?.type === 'edge') featuresByType.edges++;
+      else if (f.properties?.type === 'camera') featuresByType.cameras++;
+    }
+    console.log(`[GetFloorPlan] Building ${buildingId}: ${features.length} total features`, featuresByType,
+      `center_lat=${buildingData.centerLat}, center_lng=${buildingData.centerLng}, floors=${floorIds.length}`);
 
     return {
       type: 'FeatureCollection',
@@ -2212,12 +2226,26 @@ export class BuildingController {
         return newFloor[0].id;
       };
 
-      // Map room types
+      // Helper: safely coerce value to integer (for integer DB columns)
+      const toInt = (val: any): number | null => {
+        if (val === null || val === undefined) return null;
+        const n = Number(val);
+        if (isNaN(n)) return null;
+        return Math.round(n);
+      };
+
+      // Map FE room types to DB-valid room types
+      // DB CHECK constraint allows: bedroom, bathroom, kitchen, living_room, dining_room, office, storage, utility, hallway, lobby, stairwell, other
       const roomTypeMap: Record<string, string> = {
-        'common': 'other', 'living': 'living_room', 'dining': 'dining_room',
-        'bathroom': 'bathroom', 'kitchen': 'kitchen', 'bedroom': 'bedroom',
+        'bedroom': 'bedroom', 'bathroom': 'bathroom', 'kitchen': 'kitchen',
+        'living': 'living_room', 'dining': 'dining_room', 'office': 'office',
         'storage': 'storage', 'utility': 'utility', 'hallway': 'hallway',
-        'lobby': 'lobby', 'stairwell': 'stairwell', 'office': 'office',
+        'lobby': 'lobby', 'stairwell': 'stairwell',
+        // FE types that need mapping
+        'common': 'other', 'stairs': 'stairwell', 'elevator': 'other',
+        'corridor': 'hallway', 'closet': 'storage', 'entry': 'lobby',
+        'garage': 'other', 'outdoor': 'other', 'recreation': 'other',
+        'exit': 'other', 'living_room': 'living_room', 'dining_room': 'dining_room',
       };
 
       // ==================== PROCESS ROOM DELETIONS ====================
@@ -2249,12 +2277,18 @@ export class BuildingController {
           continue;
         }
 
-        const roomType = roomTypeMap[props.room_type] || props.room_type || 'other';
+        const roomType = roomTypeMap[props.room_type] || 'other';
+        const geomJson = JSON.stringify(geom);
         const result = await queryRunner.query(`
-          INSERT INTO room (name, type, floor_id, geometry, created_at, updated_at)
-          VALUES ($1, $2, $3, ST_Transform(ST_SetSRID(ST_GeomFromGeoJSON($4), 4326), 3857), NOW(), NOW())
+          INSERT INTO room (name, type, floor_id, geometry, color, area_sqm, centroid, created_at, updated_at)
+          VALUES ($1, $2, $3,
+            ST_Transform(ST_SetSRID(ST_GeomFromGeoJSON($4), 4326), 3857),
+            $5,
+            ST_Area(ST_Transform(ST_SetSRID(ST_GeomFromGeoJSON($4), 4326), 3857)),
+            ST_Centroid(ST_Transform(ST_SetSRID(ST_GeomFromGeoJSON($4), 4326), 3857)),
+            NOW(), NOW())
           RETURNING id
-        `, [props.name || 'Unnamed Room', roomType, floorId, JSON.stringify(geom)]);
+        `, [props.name || 'Unnamed Room', roomType, floorId, geomJson, props.color || null]);
 
         if (result.length > 0 && props.id) {
           idMappings.rooms[props.id] = result[0].id;
@@ -2281,14 +2315,18 @@ export class BuildingController {
           continue;
         }
 
-        const roomType = roomTypeMap[props.room_type] || props.room_type || 'other';
+        const roomType = roomTypeMap[props.room_type] || 'other';
+        const geomJson = JSON.stringify(geom);
         const result = await queryRunner.query(`
           UPDATE room SET name = $1, type = $2, floor_id = $3,
             geometry = ST_Transform(ST_SetSRID(ST_GeomFromGeoJSON($4), 4326), 3857),
+            color = $5,
+            area_sqm = ST_Area(ST_Transform(ST_SetSRID(ST_GeomFromGeoJSON($4), 4326), 3857)),
+            centroid = ST_Centroid(ST_Transform(ST_SetSRID(ST_GeomFromGeoJSON($4), 4326), 3857)),
             updated_at = NOW()
-          WHERE id = $5
+          WHERE id = $6
           RETURNING id
-        `, [props.name || 'Unnamed Room', roomType, floorId, JSON.stringify(geom), props.db_id]);
+        `, [props.name || 'Unnamed Room', roomType, floorId, geomJson, props.color || null, toInt(props.db_id)]);
         if (result.length > 0) stats.rooms.modified++;
       }
 
@@ -2305,6 +2343,26 @@ export class BuildingController {
         if (result.length > 0) stats.openings.deleted++;
       }
 
+      // Helper to insert opening_rooms connections
+      const insertOpeningRoomConnections = async (openingDbId: number, props: any) => {
+        const connects = props.connects || [];
+        const connectsDbIds = props.connects_db_ids || [];
+        for (let i = 0; i < connects.length; i++) {
+          // Prefer pre-resolved DB ID, then check idMappings for newly added rooms
+          const roomDbId = toInt(connectsDbIds[i]) || idMappings.rooms[connects[i]] || null;
+          if (roomDbId) {
+            try {
+              await queryRunner.query(
+                `INSERT INTO opening_rooms (opening_id, room_id, created_at) VALUES ($1, $2, NOW())`,
+                [openingDbId, roomDbId]
+              );
+            } catch (err) {
+              warnings.push(`Failed to connect opening ${openingDbId} to room ${roomDbId}: ${(err as Error).message}`);
+            }
+          }
+        }
+      };
+
       // ==================== PROCESS OPENING ADDITIONS ====================
       for (const feature of changes.openings.added) {
         const props = feature.properties;
@@ -2320,15 +2378,21 @@ export class BuildingController {
           continue;
         }
 
-        const isEmergencyExit = props.opening_type === 'emergency_exit' || props.opening_type === 'main_entrance';
+        const openingType = props.opening_type || 'door';
+        const isEmergencyExit = openingType === 'emergency_exit' || openingType === 'main_entrance';
         const result = await queryRunner.query(`
-          INSERT INTO opening (floor_id, opening_type, geometry, name, is_emergency_exit, created_at, updated_at)
-          VALUES ($1, $2, ST_Transform(ST_SetSRID(ST_GeomFromGeoJSON($3), 4326), 3857), $4, $5, NOW(), NOW())
+          INSERT INTO opening (floor_id, opening_type, geometry, name, is_emergency_exit, width_meters, created_at, updated_at)
+          VALUES ($1, $2, ST_Transform(ST_SetSRID(ST_GeomFromGeoJSON($3), 4326), 3857), $4, $5, $6, NOW(), NOW())
           RETURNING id
-        `, [floorId, props.opening_type || 'door', JSON.stringify(geom), props.name || null, isEmergencyExit]);
+        `, [floorId, openingType, JSON.stringify(geom), props.name || null, isEmergencyExit, props.width_meters || null]);
 
-        if (result.length > 0 && props.id) {
-          idMappings.openings[props.id] = result[0].id;
+        if (result.length > 0) {
+          const openingDbId = result[0].id;
+          if (props.id) {
+            idMappings.openings[props.id] = openingDbId;
+          }
+          // Insert opening_rooms connections
+          await insertOpeningRoomConnections(openingDbId, props);
         }
         stats.openings.added++;
       }
@@ -2352,15 +2416,22 @@ export class BuildingController {
           continue;
         }
 
-        const isEmergencyExit = props.opening_type === 'emergency_exit' || props.opening_type === 'main_entrance';
+        const openingType = props.opening_type || 'door';
+        const isEmergencyExit = openingType === 'emergency_exit' || openingType === 'main_entrance';
         const result = await queryRunner.query(`
           UPDATE opening SET floor_id = $1, opening_type = $2,
             geometry = ST_Transform(ST_SetSRID(ST_GeomFromGeoJSON($3), 4326), 3857),
-            is_emergency_exit = $4, updated_at = NOW()
-          WHERE id = $5
+            is_emergency_exit = $4, name = $5, width_meters = $6, updated_at = NOW()
+          WHERE id = $7
           RETURNING id
-        `, [floorId, props.opening_type || 'door', JSON.stringify(geom), isEmergencyExit, props.db_id]);
-        if (result.length > 0) stats.openings.modified++;
+        `, [floorId, openingType, JSON.stringify(geom), isEmergencyExit, props.name || null, props.width_meters || null, toInt(props.db_id)]);
+        if (result.length > 0) {
+          // Re-create opening_rooms connections (delete old, insert new)
+          const openingDbIdInt = toInt(props.db_id);
+          await queryRunner.query(`DELETE FROM opening_rooms WHERE opening_id = $1`, [openingDbIdInt]);
+          await insertOpeningRoomConnections(openingDbIdInt, props);
+          stats.openings.modified++;
+        }
       }
 
       // ==================== PROCESS CAMERA DELETIONS ====================
@@ -2373,6 +2444,22 @@ export class BuildingController {
         const result = await queryRunner.query(`DELETE FROM camera WHERE id = $1 RETURNING id`, [dbId]);
         if (result.length > 0) stats.cameras.deleted++;
       }
+
+      // Helper to resolve a frontend room ID to a database room ID (always returns integer or null)
+      const resolveRoomDbId = (frontendRoomId: string | undefined, dbId: number | string | undefined): number | null => {
+        // Prefer the pre-resolved DB ID from frontend
+        if (dbId !== null && dbId !== undefined) {
+          const n = toInt(dbId);
+          if (n !== null) return n;
+        }
+        if (!frontendRoomId) return null;
+        // Check if this room was newly added in this save
+        if (idMappings.rooms[frontendRoomId]) return idMappings.rooms[frontendRoomId];
+        // Check if it's already a numeric DB ID
+        const parsed = parseInt(String(frontendRoomId), 10);
+        if (!isNaN(parsed)) return parsed;
+        return null;
+      };
 
       // ==================== PROCESS CAMERA ADDITIONS ====================
       for (const feature of changes.cameras.added) {
@@ -2389,12 +2476,13 @@ export class BuildingController {
           continue;
         }
 
+        const roomDbId = resolveRoomDbId(props.linked_room_id, props.linked_room_db_id);
         const cameraCode = `B${buildingId}_${props.camera_id || `CAM_${Date.now()}_${stats.cameras.added}`}`;
         const result = await queryRunner.query(`
-          INSERT INTO camera (name, camera_id, rtsp_url, building_id, floor_id, status, is_fire_detection_enabled, geometry, created_at, updated_at)
-          VALUES ($1, $2, $3, $4, $5, 'active', $6, ST_Transform(ST_SetSRID(ST_GeomFromGeoJSON($7), 4326), 3857), NOW(), NOW())
+          INSERT INTO camera (name, camera_id, rtsp_url, building_id, floor_id, room_id, status, is_fire_detection_enabled, geometry, created_at, updated_at)
+          VALUES ($1, $2, $3, $4, $5, $6, 'active', $7, ST_Transform(ST_SetSRID(ST_GeomFromGeoJSON($8), 4326), 3857), NOW(), NOW())
           RETURNING id
-        `, [props.name || 'Camera', cameraCode, props.rtsp_url || '', buildingId, floorId, props.is_fire_detection_enabled !== false, JSON.stringify(geom)]);
+        `, [props.name || 'Camera', cameraCode, props.rtsp_url || '', buildingId, floorId, roomDbId, props.is_fire_detection_enabled !== false, JSON.stringify(geom)]);
 
         if (result.length > 0 && props.id) {
           idMappings.cameras[props.id] = result[0].id;
@@ -2421,14 +2509,15 @@ export class BuildingController {
           continue;
         }
 
+        const roomDbId = resolveRoomDbId(props.linked_room_id, props.linked_room_db_id);
         const result = await queryRunner.query(`
           UPDATE camera SET name = $1, rtsp_url = $2, floor_id = $3,
-            is_fire_detection_enabled = $4,
-            geometry = ST_Transform(ST_SetSRID(ST_GeomFromGeoJSON($5), 4326), 3857),
+            room_id = $4, is_fire_detection_enabled = $5,
+            geometry = ST_Transform(ST_SetSRID(ST_GeomFromGeoJSON($6), 4326), 3857),
             updated_at = NOW()
-          WHERE id = $6
+          WHERE id = $7
           RETURNING id
-        `, [props.name, props.rtsp_url || '', floorId, props.is_fire_detection_enabled !== false, JSON.stringify(geom), props.db_id]);
+        `, [props.name, props.rtsp_url || '', floorId, roomDbId, props.is_fire_detection_enabled !== false, JSON.stringify(geom), toInt(props.db_id)]);
         if (result.length > 0) stats.cameras.modified++;
       }
 
@@ -2440,17 +2529,22 @@ export class BuildingController {
       const allFloorIds = allFloorsResult.map((f: any) => f.id);
 
       // Node type mapping (shared between routing nodes and safe point nodes)
+      // DB CHECK allows: room, corridor, staircase, elevator, exit, entrance, junction, door, window, other
       const nodeTypeMap: Record<string, string> = {
         'room_centroid': 'room', 'centroid': 'room', 'room': 'room',
-        'opening_midpoint': 'door', 'door': 'door',
+        'opening_midpoint': 'door', 'door': 'door', 'arch': 'door',
         'waypoint': 'junction', 'junction': 'junction',
         'exit': 'exit', 'entrance': 'entrance',
-        'staircase': 'staircase', 'stairs': 'staircase',
+        'emergency_exit': 'exit', 'fire_exit': 'exit',
+        'main_entrance': 'entrance',
+        'staircase': 'staircase', 'stairs': 'staircase', 'stairwell': 'staircase',
         'elevator': 'elevator', 'corridor': 'corridor', 'hallway': 'corridor',
         'window': 'window', 'safe_point': 'other',
+        // FE room types → node types
         'common': 'room', 'living': 'room', 'dining': 'room', 'bathroom': 'room',
         'kitchen': 'room', 'bedroom': 'room', 'storage': 'room', 'utility': 'room',
-        'office': 'room', 'lobby': 'room', 'stairwell': 'staircase',
+        'office': 'room', 'lobby': 'room', 'outdoor': 'exit',
+        'garage': 'room', 'closet': 'room', 'entry': 'entrance', 'recreation': 'room',
       };
 
       // ==================== REGENERATE ROUTING NODES & EDGES (only when rooms/openings change) ====================
@@ -2477,51 +2571,90 @@ export class BuildingController {
         );
 
         // Insert routing nodes from routing graph
-        if (differential.routingGraph?.nodes && Array.isArray(differential.routingGraph.nodes)) {
-          for (const node of differential.routingGraph.nodes) {
-            if (!node.lng || !node.lat) continue;
+        const routingGraphNodes = differential.routingGraph?.nodes || [];
+        const routingGraphEdges = differential.routingGraph?.edges || [];
+        console.log(`[DifferentialSave] Routing graph received: ${routingGraphNodes.length} nodes, ${routingGraphEdges.length} edges`);
+
+        let nodesSkipped = { noCoords: 0, noFloor: 0, insertFailed: 0 };
+        if (Array.isArray(routingGraphNodes) && routingGraphNodes.length > 0) {
+          for (const node of routingGraphNodes) {
+            // Use proper null/NaN check (not falsy - 0 is a valid coordinate)
+            if (node.lng == null || node.lat == null || isNaN(Number(node.lng)) || isNaN(Number(node.lat))) {
+              nodesSkipped.noCoords++;
+              continue;
+            }
             const level = node.level || '1';
             const floorId = await getFloorId(level);
-            if (!floorId) continue;
+            if (!floorId) {
+              nodesSkipped.noFloor++;
+              continue;
+            }
 
             const nodeType = nodeTypeMap[node.type] || 'other';
+            // Resolve room_id: prefer DB ID from frontend, then check idMappings for newly added rooms
+            const roomDbId = resolveRoomDbId(node.room_id, node.room_db_id);
             const geomJson = JSON.stringify({ type: 'Point', coordinates: [node.lng, node.lat] });
             const result = await queryRunner.query(`
-              INSERT INTO nodes (floor_id, type, geometry, created_at, updated_at)
-              VALUES ($1, $2, ST_Transform(ST_SetSRID(ST_GeomFromGeoJSON($3), 4326), 3857), NOW(), NOW())
+              INSERT INTO nodes (floor_id, room_id, type, geometry, created_at, updated_at)
+              VALUES ($1, $2, $3, ST_Transform(ST_SetSRID(ST_GeomFromGeoJSON($4), 4326), 3857), NOW(), NOW())
               RETURNING id
-            `, [floorId, nodeType, geomJson]);
+            `, [floorId, roomDbId, nodeType, geomJson]);
 
             if (result.length > 0) {
               nodeMap[node.id] = result[0].id;
               stats.nodes++;
+            } else {
+              nodesSkipped.insertFailed++;
             }
           }
         }
+        console.log(`[DifferentialSave] Nodes inserted: ${stats.nodes}, skipped: noCoords=${nodesSkipped.noCoords}, noFloor=${nodesSkipped.noFloor}, insertFailed=${nodesSkipped.insertFailed}`);
+        const nodeMapKeys = Object.keys(nodeMap);
+        console.log(`[DifferentialSave] nodeMap has ${nodeMapKeys.length} entries, first 5 keys:`, nodeMapKeys.slice(0, 5));
+        if (routingGraphEdges.length > 0) {
+          console.log(`[DifferentialSave] First 3 edge source/targets:`, routingGraphEdges.slice(0, 3).map((e: any) => ({ source: e.source, target: e.target, type: e.type })));
+        }
 
         // Insert edges
-        if (differential.routingGraph?.edges && Array.isArray(differential.routingGraph.edges)) {
-          for (const edge of differential.routingGraph.edges) {
+        let edgesSkipped = { noSourceTarget: 0, noSourceTargetNode: 0 };
+        if (Array.isArray(routingGraphEdges) && routingGraphEdges.length > 0) {
+          for (const edge of routingGraphEdges) {
             const sourceDbId = nodeMap[edge.source];
             const targetDbId = nodeMap[edge.target];
-            if (!sourceDbId || !targetDbId) continue;
+            if (!sourceDbId || !targetDbId) {
+              edgesSkipped.noSourceTarget++;
+              if (edgesSkipped.noSourceTarget <= 5) {
+                console.log(`[DifferentialSave] Edge skipped: source=${edge.source} (dbId=${sourceDbId}), target=${edge.target} (dbId=${targetDbId})`);
+              }
+              continue;
+            }
 
-            const sourceNode = differential.routingGraph.nodes.find((n: any) => n.id === edge.source);
-            const targetNode = differential.routingGraph.nodes.find((n: any) => n.id === edge.target);
-            if (!sourceNode || !targetNode) continue;
+            const sourceNode = routingGraphNodes.find((n: any) => n.id === edge.source);
+            const targetNode = routingGraphNodes.find((n: any) => n.id === edge.target);
+            if (!sourceNode || !targetNode) {
+              edgesSkipped.noSourceTargetNode++;
+              continue;
+            }
 
             const geomJson = JSON.stringify({
               type: 'LineString',
               coordinates: [[sourceNode.lng, sourceNode.lat], [targetNode.lng, targetNode.lat]]
             });
 
+            // Map edge type from routing graph
+            let edgeType = 'corridor';
+            if (edge.type === 'vertical_connection') {
+              edgeType = edge.connection_type === 'elevator' ? 'elevator' : 'staircase';
+            }
+
             await queryRunner.query(`
               INSERT INTO edges (source_id, target_id, edge_type, cost, geometry, created_at, updated_at)
               VALUES ($1, $2, $3, $4, ST_Transform(ST_SetSRID(ST_GeomFromGeoJSON($5), 4326), 3857), NOW(), NOW())
-            `, [sourceDbId, targetDbId, 'corridor', Math.round(edge.distance || 1), geomJson]);
+            `, [sourceDbId, targetDbId, edgeType, Math.max(1, Math.round(edge.distance || 1)), geomJson]);
             stats.edges++;
           }
         }
+        console.log(`[DifferentialSave] Edges inserted: ${stats.edges}, skipped: noSourceTarget=${edgesSkipped.noSourceTarget}, noSourceTargetNode=${edgesSkipped.noSourceTargetNode}`);
       }
 
       // ==================== DIFFERENTIAL SAFE POINTS PROCESSING ====================
@@ -2612,7 +2745,7 @@ export class BuildingController {
             INSERT INTO safe_points (node_id, floor_id, capacity, priority, created_at)
             VALUES ($1, $2, $3, $4, NOW())
             RETURNING id
-          `, [nodeId, floorId, props?.capacity || 4, 1]);
+          `, [nodeId, floorId, toInt(props?.capacity) || 4, 1]);
 
           if (spResult.length > 0) {
             idMappings.safePoints[props.id] = spResult[0].id;
@@ -2642,7 +2775,8 @@ export class BuildingController {
           }
 
           // Get existing safe_point to find its node_id
-          const existingSp = await queryRunner.query(`SELECT node_id FROM safe_points WHERE id = $1`, [props.db_id]);
+          const spDbId = toInt(props.db_id);
+          const existingSp = await queryRunner.query(`SELECT node_id FROM safe_points WHERE id = $1`, [spDbId]);
           if (existingSp.length === 0) {
             warnings.push(`Safe point ${props?.name || props?.id}: not found in database`);
             continue;
@@ -2660,7 +2794,7 @@ export class BuildingController {
           // Update safe_point record
           await queryRunner.query(`
             UPDATE safe_points SET capacity = $1, floor_id = $2 WHERE id = $3
-          `, [props.capacity || 4, floorId, props.db_id]);
+          `, [toInt(props.capacity) || 4, floorId, spDbId]);
 
           stats.safePoints.modified++;
         }
@@ -2739,6 +2873,8 @@ export class BuildingController {
     } catch (error) {
       await queryRunner.rollbackTransaction();
       console.error('[DifferentialSave] Error:', error);
+      console.error('[DifferentialSave] Stats at failure:', JSON.stringify(stats));
+      console.error('[DifferentialSave] Warnings at failure:', warnings);
       return { success: false, error: error.message, warnings };
     } finally {
       await queryRunner.release();
