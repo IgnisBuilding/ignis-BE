@@ -33,6 +33,10 @@ import {
   Fingerprint,
   Notification,
   UserSettings,
+  Employee,
+  FireBrigade,
+  FireBrigadeState,
+  FireBrigadeHQ,
 } from '@app/entities';
 import { AuthController } from './controllers/auth.controller';
 import { SensorController } from './controllers/sensor.controller';
@@ -50,9 +54,11 @@ import { NavigationController } from './controllers/navigation.controller';
 import { FingerprintController } from './controllers/fingerprint.controller';
 import { SettingsController } from './controllers/settings.controller';
 import { NotificationController } from './controllers/notification.controller';
+import { EmployeeController } from './controllers/employee.controller';
 import { FingerprintService } from './services/fingerprint.service';
 import { SettingsService } from './services/settings.service';
 import { NotificationService } from './services/notification.service';
+import { EmployeeService } from './services/employee.service';
 import { AuthService } from './services/auth.service';
 import { SensorService } from './services/sensor.service';
 import { AlertService } from './services/alert.service';
@@ -107,6 +113,10 @@ import { NavigationService } from './services/navigation.service';
       Fingerprint,
       Notification,
       UserSettings,
+      Employee,
+      FireBrigade,
+      FireBrigadeState,
+      FireBrigadeHQ,
     ]),
   ],
   controllers: [
@@ -127,6 +137,7 @@ import { NavigationService } from './services/navigation.service';
     FingerprintController,
     SettingsController,
     NotificationController,
+    EmployeeController,
   ],
   providers: [
     FireSafetyService,
@@ -146,6 +157,7 @@ import { NavigationService } from './services/navigation.service';
     FingerprintService,
     SettingsService,
     NotificationService,
+    EmployeeService,
   ],
 })
 export class FireSafetyModule {}

@@ -218,6 +218,22 @@ export class BuildingController {
     return society;
   }
 
+  // Get buildings belonging to a society
+  @Get('societies/:id/buildings')
+  @Public()
+  async getSocietyBuildings(@Param('id', ParseIntPipe) id: number) {
+    const buildings = await this.dataSource.query(`
+      SELECT b.id, b.name, b.address, b.type, b.total_floors, b.apartments_per_floor,
+             b.has_floor_plan, b.center_lat, b.center_lng, b.created_at,
+             s.name as society_name, s.location as society_location
+      FROM building b
+      LEFT JOIN society s ON b.society_id = s.id
+      WHERE b.society_id = $1
+      ORDER BY b.name
+    `, [id]);
+    return buildings;
+  }
+
   // Create a new society
   @Post('societies')
   @Public()
@@ -422,6 +438,17 @@ export class BuildingController {
         created_at: b.created_at,
       })),
       jurisdiction,
+      jurisdictionLevel: jurisdiction?.level || null,
+      employee: {
+        id: emp.id,
+        user_id: emp.user_id,
+        brigade_id: emp.brigade_id,
+        state_id: emp.state_id || emp.brigade_state_id,
+        hq_id: emp.hq_id || emp.state_hq_id,
+        brigade_name: emp.brigade_name,
+        state_name: emp.state_name,
+        hq_name: emp.hq_name,
+      },
       count: buildings.length,
     };
   }
@@ -478,7 +505,7 @@ export class BuildingController {
       // Create user account for HQ admin
       const userResult = await this.dataSource.query(`
         INSERT INTO users (email, password, name, role, is_active, created_at, updated_at)
-        VALUES ($1, $2, $3, 'fire_brigade_hq', true, NOW(), NOW())
+        VALUES ($1, $2, $3, 'firefighter_hq', true, NOW(), NOW())
         RETURNING id
       `, [generatedEmail, hashedPassword, `${body.name} Admin`]);
       userId = userResult[0].id;
@@ -491,12 +518,21 @@ export class BuildingController {
       RETURNING *
     `, [body.name, body.address || null, body.phone || null, body.email || null, userId]);
 
+    const hqId = result[0].id;
+
+    // Create employee record linking user to HQ
+    await this.dataSource.query(`
+      INSERT INTO employee (user_id, hq_id, position, rank, badge_number, status, hire_date, created_at, updated_at)
+      VALUES ($1, $2, 'HQ Commander', 'Commander', $3, 'active', NOW(), NOW(), NOW())
+      ON CONFLICT (user_id) DO UPDATE SET hq_id = $2
+    `, [userId, hqId, `HQ-${hqId}-${Date.now().toString().slice(-4)}`]);
+
     return {
       ...result[0],
       credentials: {
         email: generatedEmail,
         password: generatedPassword,
-        role: 'fire_brigade_hq'
+        role: 'firefighter_hq'
       }
     };
   }
@@ -595,7 +631,7 @@ export class BuildingController {
       // Create user account for State admin
       const userResult = await this.dataSource.query(`
         INSERT INTO users (email, password, name, role, is_active, created_at, updated_at)
-        VALUES ($1, $2, $3, 'fire_brigade_state', true, NOW(), NOW())
+        VALUES ($1, $2, $3, 'firefighter_state', true, NOW(), NOW())
         RETURNING id
       `, [generatedEmail, hashedPassword, `${body.name} Admin`]);
       userId = userResult[0].id;
@@ -608,12 +644,21 @@ export class BuildingController {
       RETURNING *
     `, [body.name, body.state, body.hq_id, body.address || null, body.phone || null, userId]);
 
+    const stateId = result[0].id;
+
+    // Create employee record linking user to State
+    await this.dataSource.query(`
+      INSERT INTO employee (user_id, state_id, position, rank, badge_number, status, hire_date, created_at, updated_at)
+      VALUES ($1, $2, 'State Commander', 'Commander', $3, 'active', NOW(), NOW(), NOW())
+      ON CONFLICT (user_id) DO UPDATE SET state_id = $2
+    `, [userId, stateId, `ST-${stateId}-${Date.now().toString().slice(-4)}`]);
+
     return {
       ...result[0],
       credentials: {
         email: generatedEmail,
         password: generatedPassword,
-        role: 'fire_brigade_state'
+        role: 'firefighter_state'
       }
     };
   }
@@ -715,10 +760,10 @@ export class BuildingController {
     if (existingUser.length > 0) {
       userId = existingUser[0].id;
     } else {
-      // Create user account for Station firefighter
+      // Create user account for Station/District firefighter
       const userResult = await this.dataSource.query(`
         INSERT INTO users (email, password, name, role, is_active, created_at, updated_at)
-        VALUES ($1, $2, $3, 'firefighter', true, NOW(), NOW())
+        VALUES ($1, $2, $3, 'firefighter_district', true, NOW(), NOW())
         RETURNING id
       `, [generatedEmail, hashedPassword, `${body.name} Firefighter`]);
       userId = userResult[0].id;
@@ -731,12 +776,21 @@ export class BuildingController {
       RETURNING *
     `, [body.name, body.location, body.state_id, body.address || null, body.phone || null, body.email || null, body.capacity || 10, userId]);
 
+    const brigadeId = result[0].id;
+
+    // Create employee record linking user to Brigade/Station
+    await this.dataSource.query(`
+      INSERT INTO employee (user_id, brigade_id, position, rank, badge_number, status, hire_date, created_at, updated_at)
+      VALUES ($1, $2, 'Station Officer', 'Officer', $3, 'active', NOW(), NOW(), NOW())
+      ON CONFLICT (user_id) DO UPDATE SET brigade_id = $2
+    `, [userId, brigadeId, `FB-${brigadeId}-${Date.now().toString().slice(-4)}`]);
+
     return {
       ...result[0],
       credentials: {
         email: generatedEmail,
         password: generatedPassword,
-        role: 'firefighter'
+        role: 'firefighter_district'
       }
     };
   }
