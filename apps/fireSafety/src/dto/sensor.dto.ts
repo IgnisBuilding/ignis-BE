@@ -27,6 +27,14 @@ export class CreateSensorDto {
 
   @IsNumber()
   @IsOptional()
+  floorId?: number;
+
+  @IsNumber()
+  @IsOptional()
+  buildingId?: number;
+
+  @IsNumber()
+  @IsOptional()
   latitude?: number;
 
   @IsNumber()

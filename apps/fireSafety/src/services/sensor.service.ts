@@ -12,11 +12,17 @@ export class SensorService {
   ) {}
 
   findAll() {
-    return this.sensorRepository.find({ relations: ['room'], order: { createdAt: 'DESC' } });
+    return this.sensorRepository.find({ 
+      relations: ['room', 'room.floor', 'room.floor.building', 'floor', 'floor.building', 'building'], 
+      order: { createdAt: 'DESC' } 
+    });
   }
 
   async findOne(id: number) {
-    const sensor = await this.sensorRepository.findOne({ where: { id }, relations: ['room'] });
+    const sensor = await this.sensorRepository.findOne({ 
+      where: { id }, 
+      relations: ['room', 'room.floor', 'room.floor.building', 'floor', 'floor.building', 'building'] 
+    });
     if (!sensor) throw new NotFoundException(`Sensor with ID ${id} not found`);
     return sensor;
   }

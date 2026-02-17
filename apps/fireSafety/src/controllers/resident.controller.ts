@@ -19,6 +19,8 @@ export class ResidentController {
   ) {
     const query = this.userRepository.createQueryBuilder('user')
       .leftJoinAndSelect('user.ownedApartments', 'apartment')
+      .leftJoinAndSelect('apartment.floor', 'floor')
+      .leftJoinAndSelect('floor.building', 'building')
       .where('user.role = :role', { role: 'resident' });
 
     if (search) {
@@ -39,16 +41,26 @@ export class ResidentController {
     // Transform to match expected resident format
     return residents.map(user => {
       const apt = user.ownedApartments?.[0] || null;
+      const building = apt?.floor?.building || null;
+      
       return {
         id: user.id,
         name: user.name,
         email: user.email,
         phone: user.phone,
         apartmentId: apt?.id || null,
-        apartment: apt ? { id: apt.id, unit_number: apt.unit_number } : null,
+        apartment: apt ? { 
+          id: apt.id, 
+          unit_number: apt.unit_number,
+          floor_level: apt.floor?.level || null,
+          building_id: building?.id || null,
+          building_name: building?.name || null,
+          society_id: building?.society_id || null,
+        } : null,
         emergencyContact: user.emergencyContact,
         isActive: user.isActive,
         status: user.isActive ? 'active' : 'inactive',
+        type: user.role === 'resident' ? 'resident' : user.role,
         createdAt: user.createdAt,
         updatedAt: user.updatedAt,
       };
