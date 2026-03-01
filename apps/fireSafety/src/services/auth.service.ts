@@ -88,6 +88,28 @@ export class AuthService {
     };
   }
 
+  createAnonymousToken(deviceId: string) {
+    // Hash device UUID to a negative numeric ID (avoids collision with real user IDs)
+    let hash = 0;
+    for (let i = 0; i < deviceId.length; i++) {
+      hash = ((hash << 5) - hash + deviceId.charCodeAt(i)) | 0;
+    }
+    const negativeId = -Math.abs(hash || 1);
+
+    const payload = { sub: negativeId, role: Role.EVACUEE, device_id: deviceId };
+    const token = this.jwtService.sign(payload, { expiresIn: '30d' });
+
+    return {
+      access_token: token,
+      user: {
+        id: negativeId,
+        name: 'Evacuee',
+        email: '',
+        role: Role.EVACUEE,
+      },
+    };
+  }
+
   async validateUser(userId: number) {
     const user = await this.userRepository.findOne({ where: { id: userId } });
     if (!user || !user.isActive) {

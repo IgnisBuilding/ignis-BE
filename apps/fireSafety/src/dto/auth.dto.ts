@@ -49,6 +49,12 @@ export class UpdateProfileDto {
   emergencyContact?: string;
 }
 
+export class AnonymousAuthDto {
+  @IsString()
+  @IsNotEmpty()
+  device_id: string;
+}
+
 export class ChangePasswordDto {
   @IsString()
   @IsNotEmpty()

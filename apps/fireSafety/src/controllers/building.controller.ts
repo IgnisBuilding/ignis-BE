@@ -125,7 +125,7 @@ export class BuildingController {
     // Also try PostGIS geometry if available
     const result = await this.dataSource.query(`
       SELECT * FROM (
-        SELECT id, name, address, type, city, area, center_lat, center_lng,
+        SELECT id, name, address, type, city, area, center_lat, center_lng, access_level,
           CASE
             WHEN geometry IS NOT NULL THEN
               ST_Distance(
@@ -160,8 +160,82 @@ export class BuildingController {
         area: result[0].area,
         centerLat: result[0].center_lat,
         centerLng: result[0].center_lng,
+        accessLevel: result[0].access_level || 'private',
         distanceMeters: Math.round(result[0].distance_meters),
       },
+    };
+  }
+
+  /**
+   * Get buildings accessible to a user at given GPS coordinates.
+   * Returns: public buildings within radius, private buildings where user is resident,
+   * and any building with active fire within 50m (emergency override).
+   */
+  @Get('accessible')
+  @Public()
+  async findAccessible(
+    @Query('lat') lat: string,
+    @Query('lng') lng: string,
+    @Query('radius') radius?: string,
+    @Query('user_id') userId?: string,
+  ) {
+    const latitude = parseFloat(lat);
+    const longitude = parseFloat(lng);
+    const radiusMeters = parseFloat(radius || '200');
+
+    if (isNaN(latitude) || isNaN(longitude)) {
+      return { buildings: [] };
+    }
+
+    const userIdNum = userId ? parseInt(userId, 10) : null;
+
+    const result = await this.dataSource.query(`
+      SELECT * FROM (
+        SELECT DISTINCT b.id, b.name, b.address, b.type, b.city, b.area,
+               b.center_lat, b.center_lng,
+               COALESCE(b.access_level, 'private') as access_level,
+               ST_Distance(
+                 ST_SetSRID(ST_MakePoint(b.center_lng::float, b.center_lat::float), 4326)::geography,
+                 ST_SetSRID(ST_MakePoint($2, $1), 4326)::geography
+               ) as distance_meters
+        FROM building b
+        WHERE b.center_lat IS NOT NULL AND b.center_lng IS NOT NULL
+        AND (
+          -- Public buildings within radius
+          (COALESCE(b.access_level, 'private') = 'public')
+          OR
+          -- Private/restricted buildings where user is apartment owner
+          ($4::integer IS NOT NULL AND EXISTS (
+            SELECT 1 FROM apartment a
+            WHERE a.floor_id IN (SELECT f.id FROM floor f WHERE f.building_id = b.id)
+            AND a.owner_id = $4
+          ))
+          OR
+          -- Emergency override: any building with active fire
+          (EXISTS (
+            SELECT 1 FROM hazards h
+            WHERE h.floor_id IN (SELECT f.id FROM floor f WHERE f.building_id = b.id)
+            AND h.status = 'ACTIVE'
+          ))
+        )
+      ) sub
+      WHERE sub.distance_meters <= $3
+      ORDER BY sub.distance_meters ASC
+    `, [latitude, longitude, radiusMeters, userIdNum]);
+
+    return {
+      buildings: result.map((r: any) => ({
+        id: r.id,
+        name: r.name,
+        address: r.address,
+        type: r.type,
+        city: r.city,
+        area: r.area,
+        centerLat: r.center_lat,
+        centerLng: r.center_lng,
+        accessLevel: r.access_level,
+        distanceMeters: Math.round(r.distance_meters),
+      })),
     };
   }
 
@@ -2932,6 +3006,25 @@ export class BuildingController {
       return { success: false, error: error.message, warnings };
     } finally {
       await queryRunner.release();
+    }
+  }
+
+  @Post('migrate-access-level')
+  @Public()
+  async migrateAccessLevel(@Body() body?: { building_id?: number; access_level?: string }) {
+    try {
+      await this.dataSource.query(`ALTER TABLE building ADD COLUMN IF NOT EXISTS access_level VARCHAR(20) DEFAULT 'private'`);
+      // Optionally update a specific building's access level
+      if (body?.building_id && body?.access_level) {
+        await this.dataSource.query(
+          `UPDATE building SET access_level = $1 WHERE id = $2`,
+          [body.access_level, body.building_id],
+        );
+        return { message: `Building ${body.building_id} set to ${body.access_level}` };
+      }
+      return { message: 'access_level column added successfully' };
+    } catch (e) {
+      return { message: 'Column may already exist', error: e.message };
     }
   }
 

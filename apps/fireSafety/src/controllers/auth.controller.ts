@@ -1,6 +1,6 @@
 import { Controller, Post, Body, UseGuards, Get, Request, Patch } from '@nestjs/common';
 import { AuthService } from '../services/auth.service';
-import { LoginDto, RegisterDto, UpdateProfileDto, ChangePasswordDto } from '../dto/auth.dto';
+import { LoginDto, RegisterDto, UpdateProfileDto, ChangePasswordDto, AnonymousAuthDto } from '../dto/auth.dto';
 import { JwtAuthGuard } from '../guards/jwt-auth.guard';
 
 @Controller('auth')
@@ -15,6 +15,11 @@ export class AuthController {
   @Post('login')
   login(@Body() loginDto: LoginDto) {
     return this.authService.login(loginDto);
+  }
+
+  @Post('anonymous')
+  anonymous(@Body() dto: AnonymousAuthDto) {
+    return this.authService.createAnonymousToken(dto.device_id);
   }
 
   @UseGuards(JwtAuthGuard)

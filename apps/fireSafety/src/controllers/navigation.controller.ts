@@ -128,6 +128,60 @@ export class NavigationController {
     }
   }
 
+  /**
+   * Batch position sync — receives array of queued position updates
+   * Used by Android app to sync offline-queued positions when back online
+   */
+  @Post('positions/batch')
+  @Public()
+  async batchPositionSync(@Body() positions: PositionUpdateDto[]) {
+    let synced = 0;
+    let failed = 0;
+
+    // Only process the latest position per user for DB storage
+    // but broadcast all for real-time tracking
+    for (const dto of positions) {
+      try {
+        // Always broadcast via WebSocket for firefighter visibility
+        this.navigationGateway.server
+          ?.to(`building:${dto.building_id}:tracking`)
+          .emit('evacuee.position', {
+            user_id: dto.user_id,
+            building_id: dto.building_id,
+            floor_id: dto.floor_id,
+            coordinates: [dto.x, dto.y],
+            heading: dto.heading,
+            status: 'active',
+            last_update: Date.now(),
+          });
+
+        // Try to persist in DB (may fail for anonymous users due to FK)
+        try {
+          await this.navigationService.updatePosition({
+            user_id: dto.user_id,
+            building_id: dto.building_id,
+            floor_id: dto.floor_id,
+            x: dto.x,
+            y: dto.y,
+            node_id: dto.node_id,
+            accuracy: dto.accuracy,
+            heading: dto.heading,
+            speed: dto.speed,
+            confidence: dto.confidence,
+          });
+        } catch (dbErr) {
+          // FK violation for anonymous users — position was still broadcast
+        }
+
+        synced++;
+      } catch (e) {
+        failed++;
+      }
+    }
+
+    return { synced, failed };
+  }
+
   // ═══════════════════════════════════════════════════════════════
   // NAVIGATION SESSIONS
   // ═══════════════════════════════════════════════════════════════

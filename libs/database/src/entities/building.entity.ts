@@ -53,6 +53,9 @@ export class building {
   @Column({ name: 'editor_state', type: 'jsonb', nullable: true })
   editorState: any; // Complete editor state (rooms, openings, cameras, calibration, etc.)
 
+  @Column({ name: 'access_level', length: 20, default: 'private' })
+  access_level: string; // 'public' | 'restricted' | 'private'
+
   @Column({ type: 'timestamp', default: () => 'CURRENT_TIMESTAMP' })
   created_at: Date;
 

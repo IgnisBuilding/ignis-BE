@@ -17,6 +17,9 @@ export enum Role {
 
   // Resident role
   RESIDENT = 'resident',
+
+  // Anonymous evacuee (Android app, no login)
+  EVACUEE = 'evacuee',
 }
 
 // Array of all roles for validation
