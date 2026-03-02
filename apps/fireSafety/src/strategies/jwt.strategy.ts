@@ -18,6 +18,11 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
   }
 
   async validate(payload: any) {
+    // Anonymous evacuee tokens (Android app) have no DB user row
+    if (payload.role === 'evacuee' && payload.device_id) {
+      return { userId: payload.sub, email: '', role: 'evacuee', device_id: payload.device_id };
+    }
+
     const user = await this.authService.validateUser(payload.sub);
     if (!user) throw new UnauthorizedException();
     return { userId: payload.sub, email: payload.email, role: payload.role };

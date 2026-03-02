@@ -1,35 +1,41 @@
-import { Entity, PrimaryGeneratedColumn, Column } from 'typeorm';
+import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, JoinColumn, CreateDateColumn, UpdateDateColumn } from 'typeorm';
+import { apartment } from './apartment.entity';
+import { floor } from './floor.entity';
 
-@Entity()
-export class incident_log {
+@Entity('incident_log')
+export class IncidentLog {
   @PrimaryGeneratedColumn()
   id: number;
 
   @Column()
-  type: number;
+  type: string;
 
   @Column()
   description: string;
 
-  @Column({ type: 'date' })
+  @Column({ type: 'text', nullable: true })
   reason: string;
 
-  @Column({ type: 'date' })
+  @Column({ type: 'varchar', nullable: true })
   severity: string;
 
-  @Column({ type: 'date' })
-  apartment_id: number;
+  @Column({ name: 'apartment_id', nullable: true })
+  apartmentId: number;
 
-  @Column({ type: 'date' })
-  floor_id: number;
+  @ManyToOne(() => apartment, { nullable: true })
+  @JoinColumn({ name: 'apartment_id' })
+  apartment: apartment;
 
-  @Column({ type: 'timestamp', default: () => 'CURRENT_TIMESTAMP' })
-  created_at: Date;
+  @Column({ name: 'floor_id', nullable: true })
+  floorId: number;
 
-  @Column({
-    type: 'timestamp',
-    default: () => 'CURRENT_TIMESTAMP',
-    onUpdate: 'CURRENT_TIMESTAMP',
-  })
-  updated_at: Date;
+  @ManyToOne(() => floor, { nullable: true })
+  @JoinColumn({ name: 'floor_id' })
+  floor: floor;
+
+  @CreateDateColumn({ name: 'created_at' })
+  createdAt: Date;
+
+  @UpdateDateColumn({ name: 'updated_at' })
+  updatedAt: Date;
 }

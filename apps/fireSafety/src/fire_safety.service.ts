@@ -328,7 +328,7 @@ export class FireSafetyService {
         FROM hazards h
         JOIN nodes n ON h.node_id = n.id
         LEFT JOIN room r ON ST_Intersects(n.geometry, r.geometry)
-        WHERE h.status = 'ACTIVE'
+        WHERE h.status = 'active'
           -- Don't consider hallways/passages as fire rooms
           AND r.name NOT ILIKE ALL(ARRAY['%hall%', '%corridor%', '%passage%', '%foyer%', '%lobby%', '%stoop%'])
       ),
@@ -338,7 +338,7 @@ export class FireSafetyService {
         FROM hazards h
         JOIN nodes n ON h.node_id = n.id
         JOIN room r ON ST_Intersects(n.geometry, r.geometry)
-        WHERE h.status = 'ACTIVE'
+        WHERE h.status = 'active'
           AND r.name NOT ILIKE ALL(ARRAY['%hall%', '%corridor%', '%passage%', '%foyer%', '%lobby%', '%stoop%'])
       ),
       blocked_nodes AS (
@@ -365,7 +365,7 @@ export class FireSafetyService {
          FROM hazards h
          JOIN nodes n ON h.node_id = n.id
          JOIN room r ON ST_Intersects(n.geometry, r.geometry)
-         WHERE h.status = 'ACTIVE'
+         WHERE h.status = 'active'
            AND h.node_id IS NOT NULL
            AND r.name NOT ILIKE ALL(ARRAY['%hall%', '%corridor%', '%passage%', '%foyer%', '%lobby%', '%stoop%'])`
       );
@@ -401,7 +401,7 @@ export class FireSafetyService {
         FROM hazards h
         JOIN nodes hn ON h.node_id = hn.id
         JOIN room r ON ST_Intersects(hn.geometry, r.geometry)
-        WHERE h.status = 'ACTIVE'
+        WHERE h.status = 'active'
           -- Don't consider hallways/passages as fire rooms
           AND r.name NOT ILIKE ALL(ARRAY['%hall%', '%corridor%', '%passage%', '%foyer%', '%lobby%', '%stoop%'])
       ) fire_rooms ON ST_Intersects(n.geometry, fire_rooms.room_geom)
@@ -411,7 +411,7 @@ export class FireSafetyService {
         FROM hazards h
         JOIN nodes hn ON h.node_id = hn.id
         JOIN room r ON ST_Intersects(hn.geometry, r.geometry)
-        WHERE h.status = 'ACTIVE'
+        WHERE h.status = 'active'
           -- Only block hazard node if it's NOT in a hallway/passage
           AND r.name NOT ILIKE ALL(ARRAY['%hall%', '%corridor%', '%passage%', '%foyer%', '%lobby%', '%stoop%'])
       ) blocked_hazard_nodes ON n.id = blocked_hazard_nodes.node_id
@@ -430,12 +430,15 @@ export class FireSafetyService {
    * through immediately adjacent areas that would be in the danger zone
    */
   private getFireRoomGeometriesSQL(): string {
+    // Use room geometry directly without buffer for edge blocking
+    // Buffer was causing edges from adjacent rooms to be blocked incorrectly
+    // Node blocking already handles nodes inside fire rooms
     return `
-      SELECT DISTINCT ST_Buffer(r.geometry, 3) as room_geom
+      SELECT DISTINCT r.geometry as room_geom
       FROM hazards h
       JOIN nodes hn ON h.node_id = hn.id
       JOIN room r ON ST_Intersects(hn.geometry, r.geometry)
-      WHERE h.status = 'ACTIVE'
+      WHERE h.status = 'active'
         AND r.name NOT ILIKE ALL(ARRAY['%hall%', '%corridor%', '%passage%', '%foyer%', '%lobby%', '%stoop%'])
     `;
   }
@@ -480,6 +483,7 @@ export class FireSafetyService {
     // TC_01 FIX: Allow routing FROM fire zone (person needs to escape)
     // TC_02 FIX: If end node is in fire, redirect to safe point instead of error
     const fireCheck = await this.checkNodesForFire([startNodeId, endNodeId]);
+    console.log(`[FireCheck] Checking nodes [${startNodeId}, ${endNodeId}], result:`, fireCheck);
 
     let effectiveEndNodeId = endNodeId;
     let endNodeInFire = false;
@@ -527,12 +531,15 @@ export class FireSafetyService {
 
         // If no safe point found, try to find nearest exit that's not in fire
         const alternateExit = await this.findNearestSafeExit(startNodeId);
+        console.log(`[FindExit] Alternate exit result:`, alternateExit);
         if (alternateExit) {
           effectiveEndNodeId = alternateExit.nodeId;
+          console.log(`[Redirect] Using alternate exit node ${effectiveEndNodeId} instead of fire zone ${endNodeId}`);
           this.logger.log(
             `Using alternate exit node ${effectiveEndNodeId} instead of fire zone ${endNodeId}`,
           );
         } else {
+          console.log(`[Redirect] No safe exit found - will proceed with isolation check`);
           // No alternatives - this will likely trigger isolation detection later
           this.logger.warn(
             `No safe alternatives found for fire zone destination ${endNodeId}`,
@@ -632,15 +639,28 @@ export class FireSafetyService {
     }
 
     // Save route to database
+    // Use effectiveEndNodeId (which may have been redirected from fire zone)
     const routeId = await this.saveRouteFromWkt(
       routeGeometry,
       startNodeId,
-      endNodeId,
+      effectiveEndNodeId,
       assignedTo,
     );
 
-    // Return as GeoJSON
-    return this.getRouteAsGeoJSON(routeId);
+    // Return as GeoJSON with redirect info if applicable
+    const routeResponse = await this.getRouteAsGeoJSON(routeId);
+
+    // Add redirect metadata if destination was changed due to fire
+    if (endNodeInFire && effectiveEndNodeId !== endNodeId) {
+      return {
+        ...routeResponse,
+        redirectedFromFireZone: true,
+        originalEndNode: endNodeId,
+        message: `Original destination (node ${endNodeId}) is in fire zone. Redirected to nearest safe exit (node ${effectiveEndNodeId}).`,
+      };
+    }
+
+    return routeResponse;
   }
 
   // ============================================
@@ -721,7 +741,7 @@ export class FireSafetyService {
           FROM hazards h
           JOIN nodes n_fire ON h.node_id = n_fire.id
           JOIN nodes n_source ON e.source_id = n_source.id
-          WHERE h.status = 'ACTIVE'
+          WHERE h.status = 'active'
         ) fire_distances ON true
         -- Exclude edges connected to ANY node inside fire room geometry
         -- EXCEPT: Allow edges DEPARTING from escape node (person fleeing fire)
@@ -754,7 +774,7 @@ export class FireSafetyService {
           FROM hazards h
           JOIN nodes n_fire ON h.node_id = n_fire.id
           JOIN nodes n_target ON e.target_id = n_target.id
-          WHERE h.status = 'ACTIVE'
+          WHERE h.status = 'active'
         ) fire_distances ON true
         -- For reverse edges, the "source" in pgRouting is actually target_id
         -- Allow edges where target_id (which becomes source in reverse) is the escape node
@@ -780,9 +800,9 @@ export class FireSafetyService {
         SELECT ST_AsText(ST_LineMerge(ST_Collect(e.geometry ORDER BY r.seq))) AS path_wkt
         FROM route r
         JOIN edges e ON e.id = (
-          CASE 
-            WHEN r.edge % 2 = 0 THEN (r.edge / 2) 
-            ELSE ((r.edge - 1) / 2) 
+          CASE
+            WHEN r.edge % 2 = 0 THEN (r.edge / 2)
+            ELSE ((r.edge - 1) / 2)
           END
         )
         WHERE r.edge <> -1;
@@ -919,9 +939,9 @@ export class FireSafetyService {
         SELECT ST_AsText(ST_LineMerge(ST_Collect(e.geometry ORDER BY r.seq))) AS path_wkt
         FROM route r
         JOIN edges e ON e.id = (
-          CASE 
-            WHEN r.edge % 2 = 0 THEN (r.edge / 2) 
-            ELSE ((r.edge - 1) / 2) 
+          CASE
+            WHEN r.edge % 2 = 0 THEN (r.edge / 2)
+            ELSE ((r.edge - 1) / 2)
           END
         )
         WHERE r.edge <> -1;
@@ -1110,7 +1130,7 @@ export class FireSafetyService {
     const query = `
       SELECT DISTINCT node_id 
       FROM hazards 
-      WHERE node_id = ANY($1::int[]) AND status = 'ACTIVE'
+      WHERE node_id = ANY($1::int[]) AND status = 'active'
     `;
 
     const result = await this.dataSource.query(query, [nodeIds]);
@@ -1201,20 +1221,15 @@ export class FireSafetyService {
 
     const baseGeoJSON = result[0].geojson;
 
-    // NOTE: Doorway enhancement disabled - causes messy route visualization
-    // The route is now displayed as the direct path computed by pgRouting
-    // which follows corridor/hallway nodes naturally without forcing
-    // through room entrance/exit doorways
-    //
-    // Previously:
-    // try {
-    //   const enhancedGeoJSON = await this.enhanceRouteWithDoorways(baseGeoJSON);
-    //   if (enhancedGeoJSON) {
-    //     Object.assign(baseGeoJSON, enhancedGeoJSON);
-    //   }
-    // } catch (e) {
-    //   console.warn('Could not enhance route with doorways:', e.message);
-    // }
+    // Enhance route to pass through door nodes instead of cutting through walls
+    try {
+      const enhancedGeoJSON = await this.enhanceRouteWithDoorNodes(baseGeoJSON);
+      if (enhancedGeoJSON) {
+        Object.assign(baseGeoJSON, enhancedGeoJSON);
+      }
+    } catch (e) {
+      console.warn('Could not enhance route with door nodes:', e.message);
+    }
 
     // Get floor-segmented route data for multi-floor visualization
     try {
@@ -1231,16 +1246,15 @@ export class FireSafetyService {
   }
 
   /**
-   * Enhances route geometry by snapping path segments to pass through doorway positions
-   * instead of cutting directly through room interiors.
+   * Enhances route geometry by detecting wall-crossing segments and inserting
+   * the centroid of crossed rooms as waypoints, forcing the path to go through
+   * room interiors rather than diagonally clipping walls.
    *
-   * This uses PostGIS to identify where route segments cross room boundaries
-   * and inserts doorway points at those intersections.
-   *
-   * @param geoJSON - Original route GeoJSON
-   * @returns Enhanced GeoJSON with doorway-snapped geometry
+   * The route already visits door and room nodes correctly, but straight-line
+   * edges between them can clip adjacent room walls in densely packed layouts.
+   * This post-processing adds room interior points at each wall crossing.
    */
-  private async enhanceRouteWithDoorways(geoJSON: any): Promise<any> {
+  private async enhanceRouteWithDoorNodes(geoJSON: any): Promise<any> {
     if (!geoJSON?.features?.[0]?.geometry?.coordinates) {
       return null;
     }
@@ -1249,121 +1263,122 @@ export class FireSafetyService {
     if (routeCoords.length < 2) return null;
 
     try {
-      // Build route LineString WKT for PostGIS query
       const coordsWkt = routeCoords.map((c: number[]) => `${c[0]} ${c[1]}`).join(', ');
       const routeLineWkt = `LINESTRING(${coordsWkt})`;
 
-      // Query to find doorway points where route crosses room boundaries
-      // Room geometry is in SRID 3857 (Web Mercator), so transform route to 3857 for comparison
-      const doorwayIntersectionsQuery = `
+      // For each route segment that crosses a room wall, find the crossed
+      // room's centroid as a waypoint. Use ST_LineLocatePoint on the segment
+      // to determine where in the segment the room centroid projects to.
+      const crossingQuery = `
         WITH route_line AS (
-          SELECT ST_Transform(ST_SetSRID(ST_GeomFromText($1), 4326), 3857) as geom
+          SELECT ST_Transform(ST_SetSRID(ST_GeomFromText($1), 4326), 3857) AS geom
         ),
-        room_boundary_lines AS (
-          -- Get the shared boundaries between adjacent rooms (already in 3857)
-          SELECT DISTINCT
-            ST_Centroid(ST_Intersection(r1.geometry, r2.geometry)) as door_point
-          FROM room r1
-          JOIN room r2 ON r1.id < r2.id
-            AND r1.floor_id = r2.floor_id
-            AND ST_Touches(r1.geometry, r2.geometry)
+        route_points AS (
+          SELECT (dp).path[1] AS idx, (dp).geom AS pt
+          FROM route_line, ST_DumpPoints(geom) AS dp
         ),
-        route_boundary_crossings AS (
-          -- Find where route line passes near room boundaries
-          SELECT DISTINCT ON (
-            round(ST_X(ST_Transform(rbl.door_point, 4326))::numeric, 6),
-            round(ST_Y(ST_Transform(rbl.door_point, 4326))::numeric, 6)
-          )
-            ST_X(ST_Transform(rbl.door_point, 4326)) as lon,
-            ST_Y(ST_Transform(rbl.door_point, 4326)) as lat,
-            -- Distance along route for ordering (0 to 1)
-            ST_LineLocatePoint(
-              rl.geom,
-              ST_ClosestPoint(rl.geom, rbl.door_point)
-            ) as route_position
-          FROM route_line rl, room_boundary_lines rbl
-          WHERE ST_DWithin(rl.geom, rbl.door_point, 8) -- Within 8 meters of route (in 3857 units)
-          ORDER BY
-            round(ST_X(ST_Transform(rbl.door_point, 4326))::numeric, 6),
-            round(ST_Y(ST_Transform(rbl.door_point, 4326))::numeric, 6),
-            route_position
+        route_segments AS (
+          SELECT p1.idx AS seg_idx,
+            ST_MakeLine(p1.pt, p2.pt) AS geom
+          FROM route_points p1
+          JOIN route_points p2 ON p2.idx = p1.idx + 1
+        ),
+        crossing_rooms AS (
+          SELECT DISTINCT ON (rs.seg_idx, r.id)
+            rs.seg_idx, r.id AS room_id, r.name AS room_name,
+            rs.geom AS seg_geom,
+            ST_Centroid(r.geometry) AS room_centroid
+          FROM route_segments rs
+          JOIN room r ON ST_Crosses(rs.geom, ST_Boundary(r.geometry))
+        ),
+        crossing_waypoints AS (
+          SELECT
+            cr.seg_idx,
+            cr.room_id,
+            cr.room_name,
+            -- Use the closest point on the segment to the room centroid
+            -- projected slightly toward the room interior
+            ST_X(ST_Transform(
+              ST_ClosestPoint(cr.seg_geom, cr.room_centroid),
+              4326
+            )) AS seg_cross_lon,
+            ST_Y(ST_Transform(
+              ST_ClosestPoint(cr.seg_geom, cr.room_centroid),
+              4326
+            )) AS seg_cross_lat,
+            -- Also get the room centroid itself
+            ST_X(ST_Transform(cr.room_centroid, 4326)) AS centroid_lon,
+            ST_Y(ST_Transform(cr.room_centroid, 4326)) AS centroid_lat,
+            ST_LineLocatePoint(cr.seg_geom, cr.room_centroid) AS seg_fraction,
+            ST_Distance(cr.room_centroid, cr.seg_geom) AS centroid_dist,
+            ROW_NUMBER() OVER (
+              PARTITION BY cr.seg_idx ORDER BY ST_Distance(cr.room_centroid, cr.seg_geom)
+            ) AS rn
+          FROM crossing_rooms cr
         )
-        SELECT lon, lat, route_position
-        FROM route_boundary_crossings
-        WHERE lon IS NOT NULL AND lat IS NOT NULL
-        ORDER BY route_position
+        SELECT seg_idx, centroid_lon, centroid_lat, round(seg_fraction::numeric, 3) AS frac
+        FROM crossing_waypoints
+        WHERE rn <= 2
+        ORDER BY seg_idx, seg_fraction
       `;
 
-      const doorwayIntersections = await this.dataSource.query(
-        doorwayIntersectionsQuery,
-        [routeLineWkt]
-      );
+      const crossingResults = await this.dataSource.query(crossingQuery, [routeLineWkt]);
 
-      if (!doorwayIntersections || doorwayIntersections.length === 0) {
+      if (!crossingResults || crossingResults.length === 0) {
         return null;
       }
 
-      // Build enhanced coordinates by inserting doorway points along the route
-      const enhancedCoords: number[][] = [];
-      let doorwayIdx = 0;
+      // Group waypoints by segment — use the centroid of each crossed room
+      // as a waypoint to route through room interiors instead of clipping walls
+      const waypointsBySegment = new Map<number, number[][]>();
+      for (const row of crossingResults) {
+        const segIdx = parseInt(row.seg_idx);
+        const coord = [parseFloat(row.centroid_lon), parseFloat(row.centroid_lat)];
 
-      for (let i = 0; i < routeCoords.length; i++) {
-        const currentCoord = routeCoords[i];
-        const currentRoutePos = i / (routeCoords.length - 1);
+        if (!waypointsBySegment.has(segIdx)) {
+          waypointsBySegment.set(segIdx, []);
+        }
 
-        // Insert any doorways that come before this position
-        while (
-          doorwayIdx < doorwayIntersections.length &&
-          parseFloat(doorwayIntersections[doorwayIdx].route_position) < currentRoutePos
-        ) {
-          const dw = doorwayIntersections[doorwayIdx];
-          const dwCoord = [parseFloat(dw.lon), parseFloat(dw.lat)];
+        const segWps = waypointsBySegment.get(segIdx)!;
+        const lastWp = segWps.length > 0 ? segWps[segWps.length - 1] : null;
+        if (!lastWp || this.coordDistance(coord, lastWp) > 0.00002) {
+          segWps.push(coord);
+        }
+      }
 
-          // Check if this doorway is not too close to the last added point
-          const lastCoord = enhancedCoords.length > 0
-            ? enhancedCoords[enhancedCoords.length - 1]
-            : null;
+      // Rebuild route with waypoint detours at wall crossings
+      const enhancedCoords: number[][] = [routeCoords[0]];
+      const addPoint = (coord: number[]) => {
+        const last = enhancedCoords[enhancedCoords.length - 1];
+        // Skip exact or near-exact duplicates of last point
+        if (this.coordDistance(coord, last) > 0.000005) {
+          enhancedCoords.push(coord);
+        }
+      };
 
-          if (!lastCoord || this.coordDistance(dwCoord, lastCoord) > 0.00003) { // ~3m min spacing
-            enhancedCoords.push(dwCoord);
+      for (let i = 0; i < routeCoords.length - 1; i++) {
+        const segIdx = i + 1; // ST_DumpPoints is 1-based
+        const waypoints = waypointsBySegment.get(segIdx);
+
+        if (waypoints) {
+          for (const wp of waypoints) {
+            addPoint(wp);
           }
-          doorwayIdx++;
         }
 
-        // Add the current route point if not too close to last
-        const lastCoord = enhancedCoords.length > 0
-          ? enhancedCoords[enhancedCoords.length - 1]
-          : null;
-
-        if (!lastCoord || this.coordDistance(currentCoord, lastCoord) > 0.00002) { // ~2m min spacing
-          enhancedCoords.push(currentCoord);
-        }
+        addPoint(routeCoords[i + 1]);
       }
 
-      // Add any remaining doorways at the end
-      while (doorwayIdx < doorwayIntersections.length) {
-        const dw = doorwayIntersections[doorwayIdx];
-        const dwCoord = [parseFloat(dw.lon), parseFloat(dw.lat)];
-        const lastCoord = enhancedCoords[enhancedCoords.length - 1];
-
-        if (this.coordDistance(dwCoord, lastCoord) > 0.00003) {
-          enhancedCoords.push(dwCoord);
-        }
-        doorwayIdx++;
-      }
-
-      // Update the geometry with enhanced coordinates
       if (enhancedCoords.length > routeCoords.length) {
         geoJSON.features[0].geometry.coordinates = enhancedCoords;
         geoJSON.features[0].properties.doorwayEnhanced = true;
         geoJSON.features[0].properties.originalPointCount = routeCoords.length;
         geoJSON.features[0].properties.enhancedPointCount = enhancedCoords.length;
-        geoJSON.features[0].properties.doorwaysInserted = doorwayIntersections.length;
       }
 
       return geoJSON;
     } catch (e) {
-      console.warn('enhanceRouteWithDoorways failed:', e.message);
+      console.warn('enhanceRouteWithDoorNodes failed:', e.message);
       return null;
     }
   }
@@ -1683,7 +1698,7 @@ export class FireSafetyService {
     const fireNodesQuery = `
       SELECT DISTINCT node_id
       FROM hazards
-      WHERE status = 'ACTIVE' AND node_id IS NOT NULL
+      WHERE status = 'active' AND node_id IS NOT NULL
     `;
     const fireNodesResult = await this.dataSource.query(fireNodesQuery);
     const activeFireNodes = fireNodesResult.map((r: any) => r.node_id);
@@ -2122,7 +2137,7 @@ export class FireSafetyService {
           ST_Transform((SELECT geometry FROM nodes WHERE id = $1), 4326)::geography
         ) as distance
       FROM nodes n
-      WHERE n.type IN ('exit', 'emergency_exit', 'entry')
+      WHERE n.type IN ('exit', 'emergency_exit', 'entry', 'door', 'stairs')
         AND n.id NOT IN (${blockedNodesSQL})
       ORDER BY distance ASC
       LIMIT 5

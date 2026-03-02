@@ -1,21 +1,41 @@
-const bcryptjs = require('bcryptjs');
+const bcrypt = require('bcryptjs');
+const { Client } = require('pg');
 
-const password = 'admin123';
-const hash = '$2b$10$5gnp/38nsPT0nDkA0RiPF.jtbiUFF6bIphk8t5mzcjnJP.ko3Yp8a';
+const client = new Client({
+  connectionString: 'postgresql://postgres.tefkynezhgqixlqjrftn:Irtiza1%40fast@aws-1-ap-northeast-1.pooler.supabase.com:5432/postgres',
+  ssl: { rejectUnauthorized: false }
+});
 
-bcryptjs.compare(password, hash, (err, result) => {
-  if (err) {
+async function testBcrypt() {
+  try {
+    await client.connect();
+
+    // Get both users
+    const users = await client.query(`
+      SELECT email, password FROM users
+      WHERE email IN ('firefighter@ignis.com', 'firefighter.district@ignis.com')
+    `);
+
+    const password = 'firefighter123';
+
+    for (const user of users.rows) {
+      console.log(`\nTesting ${user.email}:`);
+      console.log(`Hash: ${user.password}`);
+
+      const isValid = await bcrypt.compare(password, user.password);
+      console.log(`Password "${password}" valid: ${isValid}`);
+    }
+
+    // Also test what hash we get when we hash the password
+    console.log('\n--- New Hash ---');
+    const newHash = await bcrypt.hash(password, 10);
+    console.log('New hash for firefighter123:', newHash);
+
+  } catch (err) {
     console.error('Error:', err);
-  } else {
-    console.log('Password match:', result);
+  } finally {
+    await client.end();
   }
-});
+}
 
-// Also test creating a new hash
-bcryptjs.hash(password, 10, (err, newHash) => {
-  if (err) {
-    console.error('Hash error:', err);
-  } else {
-    console.log('New hash:', newHash);
-  }
-});
+testBcrypt();

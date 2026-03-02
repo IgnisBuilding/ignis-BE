@@ -493,6 +493,17 @@ export class IsolationDetectionService {
     nodeId: number,
     blockedNodeIds: number[],
   ): Promise<boolean> {
+    // First check if there are any exit nodes in the database
+    const exitNodesCheck = await this.dataSource.query(
+      `SELECT COUNT(*) as count FROM nodes WHERE type IN ('exit', 'emergency_exit', 'fire_exit', 'stairway', 'stairs', 'door')`,
+    );
+
+    if (!exitNodesCheck[0]?.count || parseInt(exitNodesCheck[0].count) === 0) {
+      // No exit nodes defined - cannot determine reachability
+      this.logger.warn('No exit nodes found in database - cannot check exit reachability');
+      return false;
+    }
+
     const blockedList =
       blockedNodeIds.length > 0 ? blockedNodeIds.join(',') : '-1';
 
@@ -510,26 +521,29 @@ export class IsolationDetectionService {
         AND e.target_id NOT IN (${blockedList})
     `.replace(/\n/g, ' ').replace(/\s+/g, ' ').trim();
 
-    const result = await this.dataSource.query(
-      `WITH exit_nodes AS (
-        SELECT node_id FROM exits WHERE type IN ('FIRE_EXIT', 'MAIN_EXIT', 'EMERGENCY_EXIT')
-        UNION
-        SELECT id FROM nodes WHERE type IN ('exit', 'emergency_exit', 'fire_exit')
-      )
-      SELECT EXISTS (
-        SELECT 1 FROM pgr_dijkstra(
-          $2,
-          $1::integer,
-          ARRAY(SELECT node_id FROM exit_nodes WHERE node_id IS NOT NULL)::integer[],
-          false
+    try {
+      const result = await this.dataSource.query(
+        `WITH exit_nodes AS (
+          SELECT id as node_id FROM nodes WHERE type IN ('exit', 'emergency_exit', 'fire_exit', 'stairway', 'stairs', 'door')
         )
-        WHERE edge != -1
-        LIMIT 1
-      ) as has_path`,
-      [nodeId, edgeQuery],
-    );
+        SELECT EXISTS (
+          SELECT 1 FROM pgr_dijkstra(
+            $2,
+            $1::integer,
+            ARRAY(SELECT node_id FROM exit_nodes WHERE node_id IS NOT NULL)::integer[],
+            false
+          )
+          WHERE edge != -1
+          LIMIT 1
+        ) as has_path`,
+        [nodeId, edgeQuery],
+      );
 
-    return result[0]?.has_path || false;
+      return result[0]?.has_path || false;
+    } catch (error) {
+      this.logger.error(`Error checking exit reachability: ${error.message}`);
+      return false;
+    }
   }
 
   /**
@@ -539,6 +553,17 @@ export class IsolationDetectionService {
     nodeId: number,
     blockedNodeIds: number[],
   ): Promise<boolean> {
+    // First check if there are any safe points in the database
+    const safePointsCheck = await this.dataSource.query(
+      `SELECT COUNT(*) as count FROM safe_points`,
+    );
+
+    if (!safePointsCheck[0]?.count || parseInt(safePointsCheck[0].count) === 0) {
+      // No safe points defined - cannot determine reachability
+      this.logger.warn('No safe points found in database - cannot check safe point reachability');
+      return false;
+    }
+
     const blockedList =
       blockedNodeIds.length > 0 ? blockedNodeIds.join(',') : '-1';
 
@@ -556,25 +581,29 @@ export class IsolationDetectionService {
         AND e.target_id NOT IN (${blockedList})
     `.replace(/\n/g, ' ').replace(/\s+/g, ' ').trim();
 
-    // First check if safe_points table has the is_active column
-    const result = await this.dataSource.query(
-      `WITH safe_point_nodes AS (
-        SELECT node_id FROM safe_points
-      )
-      SELECT EXISTS (
-        SELECT 1 FROM pgr_dijkstra(
-          $2,
-          $1::integer,
-          ARRAY(SELECT node_id FROM safe_point_nodes WHERE node_id IS NOT NULL)::integer[],
-          false
+    try {
+      const result = await this.dataSource.query(
+        `WITH safe_point_nodes AS (
+          SELECT node_id FROM safe_points
         )
-        WHERE edge != -1
-        LIMIT 1
-      ) as has_path`,
-      [nodeId, edgeQuery],
-    );
+        SELECT EXISTS (
+          SELECT 1 FROM pgr_dijkstra(
+            $2,
+            $1::integer,
+            ARRAY(SELECT node_id FROM safe_point_nodes WHERE node_id IS NOT NULL)::integer[],
+            false
+          )
+          WHERE edge != -1
+          LIMIT 1
+        ) as has_path`,
+        [nodeId, edgeQuery],
+      );
 
-    return result[0]?.has_path || false;
+      return result[0]?.has_path || false;
+    } catch (error) {
+      this.logger.error(`Error checking safe point reachability: ${error.message}`);
+      return false;
+    }
   }
 
   /**
@@ -590,7 +619,7 @@ export class IsolationDetectionService {
       `SELECT h.id
        FROM hazards h
        WHERE h.node_id = ANY($1::integer[])
-         AND h.status = 'ACTIVE'`,
+         AND h.status = 'active'`,
       [blockedNodeIds],
     );
 
@@ -614,7 +643,7 @@ export class IsolationDetectionService {
       CROSS JOIN hazards h
       JOIN nodes n_fire ON h.node_id = n_fire.id
       WHERE n_occupant.id = $1
-        AND h.status = 'ACTIVE'`,
+        AND h.status = 'active'`,
       [nodeId],
     );
 

@@ -1,29 +1,39 @@
-import { Entity, PrimaryGeneratedColumn, Column } from 'typeorm';
+import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, JoinColumn, CreateDateColumn, UpdateDateColumn } from 'typeorm';
+import { User } from './user.entity';
 
-@Entity()
-export class notification {
+@Entity('notification')
+export class Notification {
   @PrimaryGeneratedColumn()
   id: number;
 
-  @Column()
-  user_id: string;
+  @Column({ name: 'user_id', nullable: true })
+  userId: number | null;
+
+  @ManyToOne(() => User, { nullable: true })
+  @JoinColumn({ name: 'user_id' })
+  user: User;
+
+  @Column({ default: 'Notification' })
+  title: string;
 
   @Column()
   type: string;
 
-  @Column({ type: 'date' })
+  @Column({ type: 'text' })
   message: string;
 
-  @Column({ type: 'date' })
+  @Column({ default: 'medium' })
+  priority: string;
+
+  @Column({ name: 'role_target', nullable: true })
+  roleTarget: string | null;
+
+  @Column({ type: 'varchar', default: 'unread' })
   status: string;
 
-  @Column({ type: 'timestamp', default: () => 'CURRENT_TIMESTAMP' })
-  created_at: Date;
+  @CreateDateColumn({ name: 'created_at' })
+  createdAt: Date;
 
-  @Column({
-    type: 'timestamp',
-    default: () => 'CURRENT_TIMESTAMP',
-    onUpdate: 'CURRENT_TIMESTAMP',
-  })
-  updated_at: Date;
+  @UpdateDateColumn({ name: 'updated_at' })
+  updatedAt: Date;
 }

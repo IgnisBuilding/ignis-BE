@@ -9,7 +9,6 @@ import {
 import { floor } from './floor.entity';
 import { User } from './user.entity';
 import { room } from './room.entity';
-import { Resident } from './resident.entity';
 
 @Entity()
 export class apartment {
@@ -26,17 +25,17 @@ export class apartment {
   @JoinColumn({ name: 'floor_id' })
   floor: floor;
 
-  @ManyToOne(() => User, (user) => user.apartments, { nullable: true })
-  @JoinColumn({ name: 'user_id' })
-  user: User;
+  @ManyToOne(() => User, (user) => user.ownedApartments, { nullable: true })
+  @JoinColumn({ name: 'owner_id' })
+  owner: User;
 
-  @Column({ name: 'user_id', nullable: true })
-  userId: number;
+  @Column({ name: 'owner_id', nullable: true })
+  ownerId: number;
 
   @Column({ type: 'boolean', default: false })
   occupied: boolean;
 
-  @Column({ type: 'geometry', spatialFeatureType: 'Polygon', srid: 3857 })
+  @Column({ type: 'geometry', spatialFeatureType: 'Polygon', srid: 3857, nullable: true })
   geometry: string;
 
   @Column({ type: 'timestamp', default: () => 'CURRENT_TIMESTAMP' })
@@ -51,7 +50,4 @@ export class apartment {
 
   @OneToMany(() => room, (room) => room.apartment)
   rooms: room[];
-
-  @OneToMany(() => Resident, (resident) => resident.apartment)
-  residents: Resident[];
 }

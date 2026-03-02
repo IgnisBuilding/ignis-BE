@@ -1,14 +1,24 @@
-import { IsString, IsEnum, IsNumber } from 'class-validator';
+import { IsString, IsEnum, IsNumber, IsOptional } from 'class-validator';
 
 export class CreateHazardDto {
   @IsString()
   type: string;
 
+  @IsOptional()
   @IsNumber()
-  apartmentId: number;
+  apartmentId?: number;
 
+  @IsOptional()
   @IsNumber()
-  nodeId: number;
+  nodeId?: number;
+
+  @IsOptional()
+  @IsNumber()
+  roomId?: number;
+
+  @IsOptional()
+  @IsNumber()
+  floorId?: number;
 
   @IsString()
   severity: string;

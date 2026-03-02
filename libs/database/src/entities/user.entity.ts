@@ -18,11 +18,19 @@ export class User {
   @Column({ default: 'user' })
   role: string;
 
-  @OneToMany(() => apartment, (apartment) => apartment.user)
-  apartments: apartment[];
-
   @Column({ name: 'is_active', default: true })
   isActive: boolean;
+
+  // Fields merged from residents table
+  @Column({ nullable: true })
+  phone: string;
+
+  @Column({ name: 'emergency_contact', nullable: true })
+  emergencyContact: string;
+
+  // Apartments owned by this user (via apartment.owner_id)
+  @OneToMany(() => apartment, (apartment) => apartment.owner)
+  ownedApartments: apartment[];
 
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
