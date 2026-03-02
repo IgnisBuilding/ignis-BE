@@ -770,43 +770,14 @@ export class FireSafetyController {
     return this.fireSafetyService.findAll();
   }
 
-  @Get(':id')
-  findOne(@Param('id', ParseIntPipe) id: number) {
-    return this.fireSafetyService.findOne(id);
-  }
-
-  @Get(':id/geojson')
-  getRouteAsGeoJSON(@Param('id', ParseIntPipe) id: number) {
-    // First, ensure the route exists. findOne will throw if not found.
-    this.fireSafetyService.findOne(id);
-    // Then, return the GeoJSON representation.
-    return this.fireSafetyService.getRouteAsGeoJSON(id);
-  }
-
-  @Delete(':id')
-  remove(@Param('id', ParseIntPipe) id: number) {
-    return this.fireSafetyService.remove(id);
-  }
-
   // ============================================
   // SAFEST POINT ENDPOINTS
+  // (Must be defined BEFORE :id routes to avoid route collision)
   // ============================================
 
   /**
    * POST /fireSafety/safest-point
    * Finds the safest point when exits are blocked by fire
-   *
-   * This endpoint calculates the best location for a person to wait
-   * for rescue when all exits are blocked. The algorithm considers:
-   * - Distance from active fires
-   * - Window access (ventilation, signaling)
-   * - External access (rescue teams can reach)
-   * - Fire resistant structure
-   * - Communication access
-   * - Capacity for multiple people
-   *
-   * @param dto - Contains currentNodeId and optional floorId
-   * @returns Safe point details with route and safety score breakdown
    */
   @Post('safest-point')
   async findSafestPoint(@Body() dto: FindSafestPointDto) {
@@ -819,9 +790,6 @@ export class FireSafetyController {
   /**
    * GET /fireSafety/safe-points
    * Returns all configured safe points in the building
-   *
-   * Safe points are pre-designated locations where people can
-   * safely wait for rescue if exits are blocked.
    */
   @Get('safe-points')
   async getAllSafePoints() {
@@ -862,6 +830,26 @@ export class FireSafetyController {
     return res && res[0]
       ? res[0].geojson
       : { type: 'FeatureCollection', features: [] };
+  }
+
+  // ============================================
+  // GENERIC :id ROUTES (must come AFTER all named routes)
+  // ============================================
+
+  @Get(':id')
+  findOne(@Param('id', ParseIntPipe) id: number) {
+    return this.fireSafetyService.findOne(id);
+  }
+
+  @Get(':id/geojson')
+  getRouteAsGeoJSON(@Param('id', ParseIntPipe) id: number) {
+    this.fireSafetyService.findOne(id);
+    return this.fireSafetyService.getRouteAsGeoJSON(id);
+  }
+
+  @Delete(':id')
+  remove(@Param('id', ParseIntPipe) id: number) {
+    return this.fireSafetyService.remove(id);
   }
 
   // ============================================

@@ -37,11 +37,29 @@ export class FingerprintService {
     return { uploaded, failed: errors.length, errors: errors.length > 0 ? errors : undefined };
   }
 
-  async findByBuilding(buildingId: number): Promise<Fingerprint[]> {
-    return this.fingerprintRepo.find({
+  async findByBuilding(buildingId: number): Promise<any[]> {
+    const fingerprints = await this.fingerprintRepo.find({
       where: { buildingId },
+      relations: ['floor'],
       order: { createdAt: 'DESC' },
     });
+
+    // Return both camelCase (web) and snake_case (Android) field names
+    return fingerprints.map(fp => ({
+      id: fp.id,
+      buildingId: fp.buildingId,
+      building_id: fp.buildingId,
+      floorId: fp.floorId,
+      floor_id: fp.floorId,
+      floor: fp.floor?.level ?? 0,
+      x: fp.x,
+      y: fp.y,
+      label: fp.label,
+      locationName: fp.label || '',
+      signals: fp.signals,
+      collectedAt: fp.collectedAt,
+      timestamp: fp.collectedAt ? new Date(fp.collectedAt).getTime() : 0,
+    }));
   }
 
   async delete(id: string): Promise<void> {
