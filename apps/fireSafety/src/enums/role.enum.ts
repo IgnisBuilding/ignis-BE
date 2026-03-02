@@ -27,6 +27,7 @@ export const ALL_ROLES = Object.values(Role);
 
 // Role hierarchy - higher index = more permissions
 export const ROLE_HIERARCHY: Role[] = [
+  Role.EVACUEE,
   Role.RESIDENT,
   Role.FIREFIGHTER,
   Role.FIREFIGHTER_DISTRICT,
