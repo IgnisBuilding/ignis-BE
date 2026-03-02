@@ -2,12 +2,15 @@ import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Fingerprint } from '@app/entities';
+import { floor } from '@app/entities';
 
 @Injectable()
 export class FingerprintService {
   constructor(
     @InjectRepository(Fingerprint)
     private fingerprintRepo: Repository<Fingerprint>,
+    @InjectRepository(floor)
+    private floorRepo: Repository<floor>,
   ) {}
 
   async uploadBatch(fingerprints: Partial<Fingerprint>[]): Promise<{ uploaded: number; failed: number; skipped: number; errors: string[] }> {
@@ -21,7 +24,16 @@ export class FingerprintService {
         // Handle both Android format (snake_case / different names) and web format (camelCase)
         const raw = fp as any;
         const buildingId = fp.buildingId ?? raw.building_id;
-        const floorId = fp.floorId ?? raw.floor_id;
+        let floorId = fp.floorId ?? raw.floor_id;
+
+        // If floor_id is missing but we have a floor level number, resolve it
+        if (!floorId && buildingId && raw.floor != null) {
+          const floorEntity = await this.floorRepo.findOne({
+            where: { building_id: buildingId, level: raw.floor },
+          });
+          if (floorEntity) floorId = floorEntity.id;
+        }
+
         const x = fp.x;
         const y = fp.y;
         const label = fp.label ?? raw.locationName;
