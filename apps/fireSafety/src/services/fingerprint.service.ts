@@ -14,18 +14,32 @@ export class FingerprintService {
     let uploaded = 0;
     const errors: string[] = [];
 
+    let skipped = 0;
+
     for (const fp of fingerprints) {
       try {
         // Handle both Android format (snake_case / different names) and web format (camelCase)
         const raw = fp as any;
+        const buildingId = fp.buildingId ?? raw.building_id;
+        const floorId = fp.floorId ?? raw.floor_id;
+        const x = fp.x;
+        const y = fp.y;
+        const label = fp.label ?? raw.locationName;
+        const collectedAt = fp.collectedAt ?? (raw.timestamp ? new Date(raw.timestamp) : new Date());
+
+        // Skip duplicates: same building, location, coordinates, and collection time
+        const existing = await this.fingerprintRepo.findOne({
+          where: { buildingId, x, y, label, collectedAt },
+        });
+        if (existing) {
+          skipped++;
+          continue;
+        }
+
         const entity = this.fingerprintRepo.create({
-          buildingId: fp.buildingId ?? raw.building_id,
-          floorId: fp.floorId ?? raw.floor_id,
-          x: fp.x,
-          y: fp.y,
-          label: fp.label ?? raw.locationName,
+          buildingId, floorId, x, y, label,
           signals: fp.signals,
-          collectedAt: fp.collectedAt ?? (raw.timestamp ? new Date(raw.timestamp) : new Date()),
+          collectedAt,
         });
         await this.fingerprintRepo.save(entity);
         uploaded++;
@@ -34,7 +48,7 @@ export class FingerprintService {
       }
     }
 
-    return { uploaded, failed: errors.length, errors: errors.length > 0 ? errors : undefined };
+    return { uploaded, failed: errors.length, skipped, errors: errors.length > 0 ? errors : undefined };
   }
 
   async findByBuilding(buildingId: number): Promise<any[]> {
