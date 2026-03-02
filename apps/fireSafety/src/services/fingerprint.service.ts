@@ -10,7 +10,7 @@ export class FingerprintService {
     private fingerprintRepo: Repository<Fingerprint>,
   ) {}
 
-  async uploadBatch(fingerprints: Partial<Fingerprint>[]): Promise<{ uploaded: number; failed: number; errors: string[] }> {
+  async uploadBatch(fingerprints: Partial<Fingerprint>[]): Promise<{ uploaded: number; failed: number; skipped: number; errors: string[] }> {
     let uploaded = 0;
     const errors: string[] = [];
 
