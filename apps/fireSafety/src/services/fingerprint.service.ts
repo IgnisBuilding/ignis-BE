@@ -16,14 +16,16 @@ export class FingerprintService {
 
     for (const fp of fingerprints) {
       try {
+        // Handle both Android format (snake_case / different names) and web format (camelCase)
+        const raw = fp as any;
         const entity = this.fingerprintRepo.create({
-          buildingId: fp.buildingId,
-          floorId: fp.floorId,
+          buildingId: fp.buildingId ?? raw.building_id,
+          floorId: fp.floorId ?? raw.floor_id,
           x: fp.x,
           y: fp.y,
-          label: fp.label,
+          label: fp.label ?? raw.locationName,
           signals: fp.signals,
-          collectedAt: fp.collectedAt || new Date(),
+          collectedAt: fp.collectedAt ?? (raw.timestamp ? new Date(raw.timestamp) : new Date()),
         });
         await this.fingerprintRepo.save(entity);
         uploaded++;
