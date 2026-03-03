@@ -58,6 +58,8 @@ export class NavigationController {
         heading: dto.heading,
         speed: dto.speed,
         confidence: dto.confidence,
+        device_id: dto.device_id,
+        position_source: dto.position_source,
       });
 
       // Check if user has active navigation session
@@ -155,23 +157,21 @@ export class NavigationController {
             last_update: Date.now(),
           });
 
-        // Try to persist in DB (may fail for anonymous users due to FK)
-        try {
-          await this.navigationService.updatePosition({
-            user_id: dto.user_id,
-            building_id: dto.building_id,
-            floor_id: dto.floor_id,
-            x: dto.x,
-            y: dto.y,
-            node_id: dto.node_id,
-            accuracy: dto.accuracy,
-            heading: dto.heading,
-            speed: dto.speed,
-            confidence: dto.confidence,
-          });
-        } catch (dbErr) {
-          // FK violation for anonymous users — position was still broadcast
-        }
+        // Persist in DB (now supports anonymous users via device_id)
+        await this.navigationService.updatePosition({
+          user_id: dto.user_id,
+          building_id: dto.building_id,
+          floor_id: dto.floor_id,
+          x: dto.x,
+          y: dto.y,
+          node_id: dto.node_id,
+          accuracy: dto.accuracy,
+          heading: dto.heading,
+          speed: dto.speed,
+          confidence: dto.confidence,
+          device_id: dto.device_id,
+          position_source: dto.position_source,
+        });
 
         synced++;
       } catch (e) {

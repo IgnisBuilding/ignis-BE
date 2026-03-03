@@ -30,6 +30,7 @@ export * from './fire_brigade.entity';
 export * from './employee.entity';
 export * from './safe_point.entity';
 export * from './user-position.entity';
+export * from './user-position-history.entity';
 export * from './navigation-session.entity';
 export * from './fingerprint.entity';
 export * from './user-settings.entity';

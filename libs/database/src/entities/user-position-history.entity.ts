@@ -4,15 +4,15 @@ import {
   Column,
   ManyToOne,
   JoinColumn,
-  CreateDateColumn,
 } from 'typeorm';
 import { User } from './user.entity';
 import { building } from './building.entity';
 import { floor } from './floor.entity';
+import { NavigationSession } from './navigation-session.entity';
 import { nodes } from './nodes.entity';
 
-@Entity('user_positions')
-export class UserPosition {
+@Entity('user_position_history')
+export class UserPositionHistory {
   @PrimaryGeneratedColumn()
   id: number;
 
@@ -22,9 +22,6 @@ export class UserPosition {
   @ManyToOne(() => User, { onDelete: 'CASCADE', nullable: true })
   @JoinColumn({ name: 'user_id' })
   user: User;
-
-  @Column({ name: 'device_id', length: 100, nullable: true })
-  deviceId: string;
 
   @Column({ name: 'building_id' })
   buildingId: number;
@@ -40,14 +37,20 @@ export class UserPosition {
   @JoinColumn({ name: 'floor_id' })
   floor: floor;
 
-  @Column({ name: 'nearest_node_id', nullable: true })
-  nearestNodeId: number;
+  @Column({ name: 'session_id', nullable: true })
+  sessionId: number;
+
+  @ManyToOne(() => NavigationSession, { onDelete: 'SET NULL', nullable: true })
+  @JoinColumn({ name: 'session_id' })
+  session: NavigationSession;
+
+  @Column({ name: 'node_id', nullable: true })
+  nodeId: number;
 
   @ManyToOne(() => nodes, { nullable: true })
-  @JoinColumn({ name: 'nearest_node_id' })
-  nearestNode: nodes;
+  @JoinColumn({ name: 'node_id' })
+  node: nodes;
 
-  // Local building coordinates (meters)
   @Column({ type: 'decimal', precision: 10, scale: 4 })
   x: number;
 
@@ -62,42 +65,24 @@ export class UserPosition {
   })
   geometry: string;
 
+  @Column({ type: 'decimal', precision: 5, scale: 2, nullable: true })
+  heading: number;
+
   @Column({
     name: 'accuracy_meters',
     type: 'decimal',
     precision: 8,
     scale: 2,
-    default: 5.0,
+    nullable: true,
   })
   accuracyMeters: number;
 
-  @Column({
-    type: 'decimal',
-    precision: 3,
-    scale: 2,
-    nullable: true,
-    default: 0.5,
-  })
-  confidence: number;
+  @Column({ name: 'device_id', length: 100, nullable: true })
+  deviceId: string;
 
-  @Column({ type: 'decimal', precision: 5, scale: 2, nullable: true })
-  heading: number;
-
-  @Column({ type: 'decimal', precision: 5, scale: 2, nullable: true })
-  speed: number;
-
-  @Column({ name: 'sensor_data', type: 'jsonb', nullable: true })
-  sensorData: object;
-
-  @Column({ name: 'position_source', length: 20, default: 'wifi' })
+  @Column({ name: 'position_source', length: 20, nullable: true })
   positionSource: string;
-
-  @Column({ length: 20, default: 'active' })
-  status: string; // 'active', 'navigating', 'safe', 'trapped', 'offline'
 
   @Column({ type: 'timestamp', default: () => 'CURRENT_TIMESTAMP' })
   timestamp: Date;
-
-  @CreateDateColumn({ name: 'created_at' })
-  createdAt: Date;
 }

@@ -26,6 +26,7 @@ export interface PositionUpdatePayload {
   speed?: number;
   confidence?: number;
   sensor_data?: object;
+  position_source?: string; // 'wifi', 'gps', 'pdr'
 }
 
 export interface NavigationStartPayload {

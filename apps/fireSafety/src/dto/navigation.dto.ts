@@ -19,6 +19,7 @@ export class NavigationRouteDto {
  * DTO for position updates via REST (fallback for WebSocket)
  */
 export class PositionUpdateDto {
+  @IsOptional()
   @IsInt()
   user_id: number;
 
@@ -56,6 +57,14 @@ export class PositionUpdateDto {
   @Min(0)
   @Max(1)
   confidence?: number;
+
+  @IsOptional()
+  @IsString()
+  device_id?: string;
+
+  @IsOptional()
+  @IsString()
+  position_source?: string;
 }
 
 /**

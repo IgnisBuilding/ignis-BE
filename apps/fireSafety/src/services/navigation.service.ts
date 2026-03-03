@@ -3,6 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource } from 'typeorm';
 import {
   UserPosition,
+  UserPositionHistory,
   NavigationSession,
   nodes,
   floor,
@@ -47,6 +48,8 @@ export class NavigationService {
   constructor(
     @InjectRepository(UserPosition)
     private positionRepo: Repository<UserPosition>,
+    @InjectRepository(UserPositionHistory)
+    private positionHistoryRepo: Repository<UserPositionHistory>,
     @InjectRepository(NavigationSession)
     private sessionRepo: Repository<NavigationSession>,
     @InjectRepository(nodes)
@@ -75,11 +78,22 @@ export class NavigationService {
     speed?: number;
     confidence?: number;
     sensor_data?: object;
+    device_id?: string;
+    position_source?: string;
   }): Promise<UserPosition> {
-    // Find or create position record
-    let position = await this.positionRepo.findOne({
-      where: { userId: data.user_id },
-    });
+    const isAnonymous = !data.user_id || data.user_id <= 0;
+
+    // Find existing position: by device_id for anonymous, by user_id for authenticated
+    let position: UserPosition | null = null;
+    if (isAnonymous && data.device_id) {
+      position = await this.positionRepo.findOne({
+        where: { deviceId: data.device_id },
+      });
+    } else if (!isAnonymous) {
+      position = await this.positionRepo.findOne({
+        where: { userId: data.user_id },
+      });
+    }
 
     const nearestNodeId = data.node_id || (await this.findNearestNodeId(data.x, data.y, data.floor_id));
 
@@ -95,11 +109,13 @@ export class NavigationService {
       position.speed = data.speed;
       position.confidence = data.confidence || 0.5;
       position.sensorData = data.sensor_data;
+      position.positionSource = data.position_source || position.positionSource || 'wifi';
       position.timestamp = new Date();
     } else {
       // Create new
       position = this.positionRepo.create({
-        userId: data.user_id,
+        userId: isAnonymous ? null : data.user_id,
+        deviceId: data.device_id || null,
         buildingId: data.building_id,
         floorId: data.floor_id,
         x: data.x,
@@ -110,12 +126,33 @@ export class NavigationService {
         speed: data.speed,
         confidence: data.confidence || 0.5,
         sensorData: data.sensor_data,
-        positionSource: 'wifi',
+        positionSource: data.position_source || 'wifi',
         status: 'active',
       });
     }
 
-    return this.positionRepo.save(position);
+    const saved = await this.positionRepo.save(position);
+
+    // Also write to position history for analytics
+    try {
+      const historyEntry = this.positionHistoryRepo.create({
+        userId: isAnonymous ? null : data.user_id,
+        deviceId: data.device_id || null,
+        buildingId: data.building_id,
+        floorId: data.floor_id,
+        nodeId: nearestNodeId,
+        x: data.x,
+        y: data.y,
+        heading: data.heading,
+        accuracyMeters: data.accuracy,
+        positionSource: data.position_source || 'wifi',
+      });
+      await this.positionHistoryRepo.save(historyEntry);
+    } catch (histErr) {
+      this.logger.warn(`Failed to write position history: ${histErr.message}`);
+    }
+
+    return saved;
   }
 
   async getLatestPosition(userId: number): Promise<UserPosition | null> {
