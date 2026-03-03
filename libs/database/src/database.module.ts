@@ -89,6 +89,7 @@ import { UserSettings } from './entities/user-settings.entity';
         UserSettings,
       ],
       synchronize: false,
+      migrationsRun: true,
       logging: true,
       migrations: [__dirname + '/migrations/*.ts'],
     }),
