@@ -48,10 +48,13 @@ export class FingerprintService {
           continue;
         }
 
+        const nodeId = fp.nodeId ?? raw.node_id ?? null;
+
         const entity = this.fingerprintRepo.create({
           buildingId, floorId, x, y, label,
           signals: fp.signals,
           collectedAt,
+          nodeId,
         });
         await this.fingerprintRepo.save(entity);
         uploaded++;
@@ -83,6 +86,8 @@ export class FingerprintService {
       label: fp.label,
       locationName: fp.label || '',
       signals: fp.signals,
+      nodeId: fp.nodeId,
+      node_id: fp.nodeId,
       collectedAt: fp.collectedAt,
       timestamp: fp.collectedAt ? new Date(fp.collectedAt).getTime() : 0,
     }));

@@ -1,6 +1,7 @@
 import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, JoinColumn } from 'typeorm';
 import { building } from './building.entity';
 import { floor } from './floor.entity';
+import { nodes } from './nodes.entity';
 
 @Entity('fingerprints')
 export class Fingerprint {
@@ -20,6 +21,13 @@ export class Fingerprint {
   @ManyToOne(() => floor, { nullable: true })
   @JoinColumn({ name: 'floor_id' })
   floor: floor;
+
+  @Column({ name: 'node_id', nullable: true })
+  nodeId: number;
+
+  @ManyToOne(() => nodes, { nullable: true })
+  @JoinColumn({ name: 'node_id' })
+  node: nodes;
 
   @Column({ type: 'float' })
   x: number;
