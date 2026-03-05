@@ -319,6 +319,8 @@ export class FireSafetyController {
               'id', n.id,
               'type', n.type,
               'floor_id', n.floor_id,
+              'floor_level', f.level,
+              'floor_name', f.name,
               'room_id', n.room_id,
               'name', r.name,
               'description', n.description
