@@ -319,6 +319,8 @@ export class FireSafetyController {
               'id', n.id,
               'type', n.type,
               'floor_id', n.floor_id,
+              'room_id', n.room_id,
+              'name', r.name,
               'description', n.description
             )
           )
@@ -326,6 +328,7 @@ export class FireSafetyController {
       ) AS geojson
       FROM nodes n
       LEFT JOIN floor f ON n.floor_id = f.id
+      LEFT JOIN room r ON n.room_id = r.id
       ${whereClause};
     `;
     const res = await this.dataSource.query(query);
