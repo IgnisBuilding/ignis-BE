@@ -481,29 +481,32 @@ export class FireSafetyService {
     if (!endNodeId) {
       this.logger.log(`No endNodeId provided — auto-finding nearest exit from node ${startNodeId}`);
 
-      // Try safe point first, then nearest exit
-      const safePointResult = await this.findRouteToNearestSafePoint(startNodeId);
-      if (safePointResult) {
-        this.logger.log(`Auto-evacuation: routed to safe point ${safePointResult.safePointName}`);
-        return {
-          ...safePointResult.route,
-          autoEvacuation: true,
-          safePoint: safePointResult.safePoint,
-          message: `Auto-evacuation route to ${safePointResult.safePointName}`,
-        };
-      }
+      // Find nearest exit node directly from DB
+      const exitResult = await this.dataSource.query(`
+        SELECT n.id, n.type, n.description,
+          ST_Distance(
+            ST_Transform(n.geometry, 4326)::geography,
+            ST_Transform((SELECT geometry FROM nodes WHERE id = $1), 4326)::geography
+          ) as distance
+        FROM nodes n
+        WHERE n.type IN ('exit', 'emergency_exit')
+          AND n.id != $1
+        ORDER BY distance ASC
+        LIMIT 3
+      `, [startNodeId]);
 
-      const nearestExit = await this.findNearestSafeExit(startNodeId);
-      if (nearestExit) {
-        endNodeId = nearestExit.nodeId;
-        this.logger.log(`Auto-evacuation: using nearest exit node ${endNodeId} (${nearestExit.description})`);
+      console.log(`[AutoRoute] Exit nodes found:`, exitResult?.map(e => `${e.id}(${e.type},${Math.round(e.distance)}m)`) || 'none');
+
+      if (exitResult && exitResult.length > 0) {
+        endNodeId = exitResult[0].id;
+        this.logger.log(`Auto-evacuation: routing to exit node ${endNodeId} (${exitResult[0].description || exitResult[0].type}, ${Math.round(exitResult[0].distance)}m away)`);
       } else {
-        this.logger.warn(`Auto-evacuation: no exit found from node ${startNodeId}`);
+        this.logger.warn(`Auto-evacuation: no exit nodes found in building`);
         return {
           type: 'FeatureCollection',
           features: [],
           isolated: true,
-          message: `No safe exit found from current position. Shelter in place.`,
+          message: `No exit nodes found. Shelter in place.`,
         };
       }
     }
