@@ -474,7 +474,39 @@ export class FireSafetyService {
    * @returns GeoJSON FeatureCollection with route geometry
    */
   async computeRoute(dto: CreateRouteDto): Promise<any> {
-    const { startNodeId, endNodeId, assignedTo } = dto;
+    const { startNodeId, assignedTo } = dto;
+    let { endNodeId } = dto;
+
+    // Auto-find nearest exit when endNodeId is not provided (auto-evacuation)
+    if (!endNodeId) {
+      this.logger.log(`No endNodeId provided — auto-finding nearest exit from node ${startNodeId}`);
+
+      // Try safe point first, then nearest exit
+      const safePointResult = await this.findRouteToNearestSafePoint(startNodeId);
+      if (safePointResult) {
+        this.logger.log(`Auto-evacuation: routed to safe point ${safePointResult.safePointName}`);
+        return {
+          ...safePointResult.route,
+          autoEvacuation: true,
+          safePoint: safePointResult.safePoint,
+          message: `Auto-evacuation route to ${safePointResult.safePointName}`,
+        };
+      }
+
+      const nearestExit = await this.findNearestSafeExit(startNodeId);
+      if (nearestExit) {
+        endNodeId = nearestExit.nodeId;
+        this.logger.log(`Auto-evacuation: using nearest exit node ${endNodeId} (${nearestExit.description})`);
+      } else {
+        this.logger.warn(`Auto-evacuation: no exit found from node ${startNodeId}`);
+        return {
+          type: 'FeatureCollection',
+          features: [],
+          isolated: true,
+          message: `No safe exit found from current position. Shelter in place.`,
+        };
+      }
+    }
 
     // Validate nodes exist
     await this.validateNodes(startNodeId, endNodeId);

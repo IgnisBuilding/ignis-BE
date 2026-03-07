@@ -6,8 +6,8 @@ export class CreateRouteDto {
   startNodeId: number;
 
   @IsInt()
-  @IsNotEmpty()
-  endNodeId: number;
+  @IsOptional()
+  endNodeId?: number;
 
   @IsInt()
   @IsOptional()
