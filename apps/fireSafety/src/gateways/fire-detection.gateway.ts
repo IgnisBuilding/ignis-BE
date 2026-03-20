@@ -22,6 +22,28 @@ export interface FireDetectionEvent {
   location_description?: string;
 }
 
+export interface SensorReadingEvent {
+  sensor_id: number;
+  sensor_key: string;
+  name: string;
+  type: string;
+  value: number;
+  unit: string;
+  status: 'safe' | 'warning' | 'alert';
+  timestamp: number;
+  room_id?: number;
+  floor_id?: number;
+  building_id?: number;
+}
+
+export interface SensorConnectionEvent {
+  source: 'arduino';
+  mode: 'mock' | 'hardware';
+  connected: boolean;
+  port?: string;
+  timestamp: number;
+}
+
 @WebSocketGateway({
   cors: {
     origin: '*',
@@ -37,6 +59,14 @@ export class FireDetectionGateway implements OnGatewayInit, OnGatewayConnection,
   server: Server;
 
   private connectedClients = new Set<string>();
+
+  private isReady(): boolean {
+    if (!this.server) {
+      this.logger.warn('WebSocket server not initialized yet; skipping emit');
+      return false;
+    }
+    return true;
+  }
 
   afterInit(server: Server) {
     this.logger.log('Fire Detection WebSocket Gateway initialized');
@@ -94,6 +124,10 @@ export class FireDetectionGateway implements OnGatewayInit, OnGatewayConnection,
    * Called by FireDetectionService when an alert is triggered
    */
   emitFireDetected(event: FireDetectionEvent) {
+    if (!this.isReady()) {
+      return;
+    }
+
     // Emit to all connected clients
     this.server.emit('fire.detected', event);
 
@@ -110,6 +144,10 @@ export class FireDetectionGateway implements OnGatewayInit, OnGatewayConnection,
    * Emit fire alert resolved event
    */
   emitFireResolved(data: { hazard_id: number; building_id: number; resolved_by?: string }) {
+    if (!this.isReady()) {
+      return;
+    }
+
     this.server.emit('fire.resolved', data);
     this.server.to(`building:${data.building_id}`).emit('fire.resolved:building', data);
 
@@ -120,6 +158,10 @@ export class FireDetectionGateway implements OnGatewayInit, OnGatewayConnection,
    * Emit hazard created event (manual fire placement from web/Android)
    */
   emitHazardCreated(hazard: any) {
+    if (!this.isReady()) {
+      return;
+    }
+
     const buildingId = hazard.floor?.building_id || hazard.floorId;
     this.server.emit('hazard.created', hazard);
     if (buildingId) {
@@ -132,12 +174,69 @@ export class FireDetectionGateway implements OnGatewayInit, OnGatewayConnection,
    * Emit hazard resolved event (manual resolution)
    */
   emitHazardResolved(hazard: any) {
+    if (!this.isReady()) {
+      return;
+    }
+
     const buildingId = hazard.floor?.building_id || hazard.floorId;
     this.server.emit('hazard.resolved', hazard);
     if (buildingId) {
       this.server.to(`building:${buildingId}`).emit('hazard.resolved:building', hazard);
     }
     this.logger.log(`Hazard resolved event emitted - ID: ${hazard.id}`);
+  }
+
+  /**
+   * Emit sensor reading event
+   */
+  emitSensorReading(event: SensorReadingEvent) {
+    if (!this.isReady()) {
+      return;
+    }
+
+    this.server.emit('sensor.reading', event);
+
+    if (event.building_id) {
+      this.server.to(`building:${event.building_id}`).emit('sensor.reading:building', event);
+    }
+
+    this.logger.debug(
+      `Sensor reading emitted - ${event.sensor_key}=${event.value}${event.unit}, status=${event.status}`,
+    );
+  }
+
+  /**
+   * Emit sensor alert event when threshold is breached
+   */
+  emitSensorAlert(event: SensorReadingEvent) {
+    if (!this.isReady()) {
+      return;
+    }
+
+    this.server.emit('sensor.alert', event);
+
+    if (event.building_id) {
+      this.server.to(`building:${event.building_id}`).emit('sensor.alert:building', event);
+    }
+
+    this.logger.warn(
+      `Sensor alert emitted - ${event.sensor_key}=${event.value}${event.unit}, building=${event.building_id ?? 'n/a'}`,
+    );
+  }
+
+  /**
+   * Emit Arduino connection status event
+   */
+  emitSensorConnection(event: SensorConnectionEvent) {
+    if (!this.isReady()) {
+      return;
+    }
+
+    this.server.emit('sensor.connection', event);
+
+    this.logger.log(
+      `Sensor source connection changed - mode=${event.mode}, connected=${event.connected}, port=${event.port ?? 'n/a'}`,
+    );
   }
 
   /**

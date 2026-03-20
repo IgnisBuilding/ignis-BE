@@ -1,5 +1,6 @@
 import { Controller, Get, Post, Body, Patch, Param, Delete, Query, UseGuards, ParseIntPipe } from '@nestjs/common';
 import { SensorService } from '../services/sensor.service';
+import { ArduinoSensorService } from '../services/arduino-sensor.service';
 import { CreateSensorDto, UpdateSensorDto } from '../dto/sensor.dto';
 import { JwtAuthGuard } from '../guards/jwt-auth.guard';
 import { Public } from '../decorators/public.decorator';
@@ -7,7 +8,10 @@ import { Public } from '../decorators/public.decorator';
 @Controller('sensors')
 @UseGuards(JwtAuthGuard)
 export class SensorController {
-  constructor(private sensorService: SensorService) {}
+  constructor(
+    private sensorService: SensorService,
+    private arduinoSensorService: ArduinoSensorService,
+  ) {}
 
   @Get()
   @Public()
@@ -21,6 +25,12 @@ export class SensorController {
   @Public()
   getStats() {
     return this.sensorService.getStats();
+  }
+
+  @Get('arduino/health')
+  @Public()
+  getArduinoHealth() {
+    return this.arduinoSensorService.getHealth();
   }
 
   @Get(':id')
