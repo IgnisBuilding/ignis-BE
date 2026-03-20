@@ -45,6 +45,7 @@ export class ArduinoSensorService implements OnModuleInit, OnModuleDestroy {
   private packetCount = 0;
   private lastError: string | null = null;
   private isConnected = false;
+  private isMockTickRunning = false;
 
   constructor(
     @InjectRepository(Sensor)
@@ -139,12 +140,24 @@ export class ArduinoSensorService implements OnModuleInit, OnModuleDestroy {
       timestamp: Date.now(),
     });
 
-    this.mockTimer = setInterval(async () => {
+    this.mockTimer = setInterval(() => {
+      if (this.isMockTickRunning) {
+        return;
+      }
+
+      this.isMockTickRunning = true;
       const mq7 = this.randomRange(180, 780);
       const mq5 = this.randomRange(220, 850);
 
-      await this.processPacket('MQ7', mq7);
-      await this.processPacket('MQ5', mq5);
+      Promise.all([this.processPacket('MQ7', mq7), this.processPacket('MQ5', mq5)])
+        .catch((error: unknown) => {
+          const message = error instanceof Error ? error.message : String(error);
+          this.lastError = message;
+          this.logger.warn(`Mock sensor tick failed: ${message}`);
+        })
+        .finally(() => {
+          this.isMockTickRunning = false;
+        });
     }, this.mockIntervalMs);
   }
 
@@ -287,7 +300,16 @@ export class ArduinoSensorService implements OnModuleInit, OnModuleDestroy {
     const status = this.computeStatus(key, value);
     this.lastPacketAt = new Date();
     this.packetCount += 1;
-    const updatedSensor = await this.sensorService.updateReading(sensorId, value, 'active');
+    let updatedSensor: Sensor;
+
+    try {
+      updatedSensor = await this.sensorService.updateReading(sensorId, value, 'active');
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.lastError = message;
+      this.logger.warn(`Failed to persist Arduino reading for ${key}: ${message}`);
+      return;
+    }
 
     const readingEvent: SensorReadingEvent = {
       sensor_id: updatedSensor.id,

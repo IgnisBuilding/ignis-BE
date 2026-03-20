@@ -47,11 +47,26 @@ export class SensorService {
   }
 
   async updateReading(id: number, value: number, status?: string) {
-    const sensor = await this.findOne(id);
-    sensor.value = value;
-    sensor.lastReading = new Date();
-    if (status) sensor.status = status;
-    return this.sensorRepository.save(sensor);
+    const updatePayload: Partial<Sensor> = {
+      value,
+      lastReading: new Date(),
+    };
+
+    if (status) {
+      updatePayload.status = status;
+    }
+
+    const updateResult = await this.sensorRepository.update(id, updatePayload);
+    if (!updateResult.affected) {
+      throw new NotFoundException(`Sensor with ID ${id} not found`);
+    }
+
+    const sensor = await this.sensorRepository.findOne({ where: { id } });
+    if (!sensor) {
+      throw new NotFoundException(`Sensor with ID ${id} not found`);
+    }
+
+    return sensor;
   }
 
   async remove(id: number) {
