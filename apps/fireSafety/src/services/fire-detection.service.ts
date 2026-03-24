@@ -344,7 +344,7 @@ export class FireDetectionService implements OnModuleInit, OnModuleDestroy {
       // Create default config
       config = this.fireAlertConfigRepository.create({
         building_id: buildingId,
-        min_confidence: 0.7,
+        min_confidence: 0.4,
         consecutive_detections: 3,
         cooldown_seconds: 60,
         auto_create_hazard: true,
@@ -376,7 +376,7 @@ export class FireDetectionService implements OnModuleInit, OnModuleDestroy {
   async createConfig(dto: CreateFireAlertConfigDto): Promise<fire_alert_config> {
     const config = this.fireAlertConfigRepository.create({
       building_id: dto.building_id,
-      min_confidence: dto.min_confidence ?? 0.7,
+      min_confidence: dto.min_confidence ?? 0.4,
       consecutive_detections: dto.consecutive_detections ?? 3,
       cooldown_seconds: dto.cooldown_seconds ?? 60,
       auto_create_hazard: dto.auto_create_hazard ?? true,

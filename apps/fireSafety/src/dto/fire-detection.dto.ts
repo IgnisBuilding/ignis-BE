@@ -72,7 +72,7 @@ export class CreateFireAlertConfigDto {
 
   @IsNumber()
   @IsOptional()
-  min_confidence?: number; // Default: 0.70
+  min_confidence?: number; // Default: 0.40
 
   @IsNumber()
   @IsOptional()
