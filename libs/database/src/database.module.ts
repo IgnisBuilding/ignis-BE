@@ -38,6 +38,8 @@ import { SafetyEquipment } from './entities/safety_equipment.entity';
 import { Fingerprint } from './entities/fingerprint.entity';
 import { UserSettings } from './entities/user-settings.entity';
 
+const DB_LOGGING = (process.env.DB_LOGGING || 'false').toLowerCase() === 'true';
+
 @Module({
   imports: [
     ConfigModule.forRoot({
@@ -90,7 +92,7 @@ import { UserSettings } from './entities/user-settings.entity';
       ],
       synchronize: false,
       migrationsRun: true,
-      logging: true,
+      logging: DB_LOGGING,
       migrations: [__dirname + '/migrations/*.ts'],
     }),
   ],

@@ -21,6 +21,10 @@ export class FireDetectionService implements OnModuleInit, OnModuleDestroy {
   private cacheCleanupInterval: NodeJS.Timeout | null = null;
   private readonly CACHE_CLEANUP_INTERVAL_MS = 60000; // 1 minute
   private readonly CACHE_ENTRY_TTL_SECONDS = 300; // 5 minutes
+  private readonly sensorCameraConfirmWindowSeconds = Number(
+    process.env.SENSOR_CAMERA_CONFIRM_WINDOW_SECONDS || 120,
+  );
+  private recentSensorAlerts: Map<string, number> = new Map();
 
   constructor(
     @InjectRepository(camera)
@@ -86,6 +90,13 @@ export class FireDetectionService implements OnModuleInit, OnModuleDestroy {
       }
     }
 
+    for (const [key, timestamp] of this.recentSensorAlerts) {
+      if (now - timestamp > this.CACHE_ENTRY_TTL_SECONDS) {
+        this.recentSensorAlerts.delete(key);
+        cleanedCount++;
+      }
+    }
+
     if (cleanedCount > 0) {
       this.logger.debug(`Cleaned up ${cleanedCount} stale cache entries`);
     }
@@ -142,6 +153,28 @@ export class FireDetectionService implements OnModuleInit, OnModuleDestroy {
 
     // 5. Check alert criteria
     const alertResult = await this.checkAlertCriteria(cam, config, maxConfidence, alertDto.timestamp);
+
+    if (alertResult.shouldTrigger) {
+      const hasSensorConfirmation = this.hasRecentSensorConfirmation(cam, alertDto.timestamp);
+      if (!hasSensorConfirmation) {
+        this.logger.warn(
+          `Camera fire detection for ${cam.camera_id} ignored for hazard creation: no recent sensor confirmation in location window`,
+        );
+        return {
+          received: true,
+          logged: true,
+          alert_triggered: false,
+          reason: 'No recent sensor confirmation for this location',
+          camera: {
+            id: cam.id,
+            name: cam.name,
+            room_id: cam.room_id,
+            floor_id: cam.floor_id,
+            building_id: cam.building_id,
+          },
+        };
+      }
+    }
 
     if (alertResult.shouldTrigger) {
       // 6. Create hazard if configured
@@ -296,6 +329,39 @@ export class FireDetectionService implements OnModuleInit, OnModuleDestroy {
     }
 
     return { shouldTrigger: true };
+  }
+
+  recordSensorAlert(sensor: { roomId?: number | null; floorId?: number | null; buildingId?: number | null }, _value: number, timestampSec: number) {
+    if (sensor.roomId) {
+      this.recentSensorAlerts.set(`room:${sensor.roomId}`, timestampSec);
+    }
+    if (sensor.floorId) {
+      this.recentSensorAlerts.set(`floor:${sensor.floorId}`, timestampSec);
+    }
+    if (sensor.buildingId) {
+      this.recentSensorAlerts.set(`building:${sensor.buildingId}`, timestampSec);
+    }
+  }
+
+  private hasRecentSensorConfirmation(cam: camera, cameraTimestampSec: number): boolean {
+    const keys: string[] = [];
+    if (cam.room_id) keys.push(`room:${cam.room_id}`);
+    if (cam.floor_id) keys.push(`floor:${cam.floor_id}`);
+    if (cam.building_id) keys.push(`building:${cam.building_id}`);
+
+    if (keys.length === 0) {
+      return false;
+    }
+
+    for (const key of keys) {
+      const ts = this.recentSensorAlerts.get(key);
+      if (!ts) continue;
+      if (Math.abs(cameraTimestampSec - ts) <= this.sensorCameraConfirmWindowSeconds) {
+        return true;
+      }
+    }
+
+    return false;
   }
 
   /**

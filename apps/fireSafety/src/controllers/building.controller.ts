@@ -1,7 +1,7 @@
 import { Controller, Get, Post, Patch, Delete, UseGuards, Param, ParseIntPipe, Body, Req, Query, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource } from 'typeorm';
-import { building, floor, apartment, Society, room, nodes, edges, Opening, OpeningRoom, camera, User } from '@app/entities';
+import { building, floor, apartment, Society, room, nodes, edges, Opening, OpeningRoom, camera, Sensor, User } from '@app/entities';
 import { JwtAuthGuard } from '../guards/jwt-auth.guard';
 import { Public } from '../decorators/public.decorator';
 import { Request } from 'express';
@@ -37,6 +37,7 @@ export class BuildingController {
     @InjectRepository(Opening) private openingRepo: Repository<Opening>,
     @InjectRepository(OpeningRoom) private openingRoomRepo: Repository<OpeningRoom>,
     @InjectRepository(camera) private cameraRepo: Repository<camera>,
+    @InjectRepository(Sensor) private sensorRepo: Repository<Sensor>,
     private dataSource: DataSource,
   ) {}
 
@@ -1299,6 +1300,7 @@ export class BuildingController {
           openings: { added: any[]; modified: any[]; deleted: string[] };
           cameras: { added: any[]; modified: any[]; deleted: string[] };
           safePoints: { added: any[]; modified: any[]; deleted: string[] };
+          sensors?: { added: any[]; modified: any[]; deleted: string[] };
         };
         routingGraph: { nodes: any[]; edges: any[] };
         properties: {
@@ -2233,6 +2235,7 @@ export class BuildingController {
         openings: { added: any[]; modified: any[]; deleted: string[] };
         cameras: { added: any[]; modified: any[]; deleted: string[] };
         safePoints: { added: any[]; modified: any[]; deleted: string[] };
+        sensors?: { added: any[]; modified: any[]; deleted: string[] };
       };
       routingGraph: { nodes: any[]; edges: any[] };
       properties: any;
@@ -2244,6 +2247,7 @@ export class BuildingController {
       rooms: { added: 0, modified: 0, deleted: 0 },
       openings: { added: 0, modified: 0, deleted: 0 },
       cameras: { added: 0, modified: 0, deleted: 0 },
+        sensors: { added: 0, modified: 0, deleted: 0 },
       safePoints: { added: 0, modified: 0, deleted: 0 },
       nodes: 0,
       edges: 0,
@@ -2256,7 +2260,9 @@ export class BuildingController {
       openings: Record<string, number>;
       cameras: Record<string, number>;
       safePoints: Record<string, number>;
-    } = { rooms: {}, openings: {}, cameras: {}, safePoints: {} };
+      sensors?: Record<string, number>;
+    } = { rooms: {}, openings: {}, cameras: {},
+        sensors: {}, safePoints: {} };
 
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
@@ -2276,12 +2282,16 @@ export class BuildingController {
       const hasCameraChanges =
         changes.cameras.added.length > 0 || changes.cameras.modified.length > 0 || changes.cameras.deleted.length > 0;
 
-      const hasChanges = hasRoutingChanges || hasSafePointChanges || hasCameraChanges;
+      const hasSensorChanges = changes.sensors &&
+        (changes.sensors.added.length > 0 || changes.sensors.modified.length > 0 || changes.sensors.deleted.length > 0);
 
-      console.log(`[DifferentialSave] Building ${buildingId}, hasRoutingChanges: ${hasRoutingChanges}, hasSafePointChanges: ${hasSafePointChanges}`, {
+      const hasChanges = hasRoutingChanges || hasSafePointChanges || hasCameraChanges || hasSensorChanges;
+
+      console.log(`[DifferentialSave] Building ${buildingId}, hasRoutingChanges: ${hasRoutingChanges}, hasSafePointChanges: ${hasSafePointChanges}, hasSensorChanges: ${hasSensorChanges}`, {
         rooms: { added: changes.rooms.added.length, modified: changes.rooms.modified.length, deleted: changes.rooms.deleted.length },
         openings: { added: changes.openings.added.length, modified: changes.openings.modified.length, deleted: changes.openings.deleted.length },
         cameras: { added: changes.cameras.added.length, modified: changes.cameras.modified.length, deleted: changes.cameras.deleted.length },
+        sensors: changes.sensors ? { added: changes.sensors.added.length, modified: changes.sensors.modified.length, deleted: changes.sensors.deleted.length } : 'not provided',
         safePoints: changes.safePoints ? { added: changes.safePoints.added.length, modified: changes.safePoints.modified.length, deleted: changes.safePoints.deleted.length } : 'not provided',
       });
 
@@ -2785,6 +2795,107 @@ export class BuildingController {
         console.log(`[DifferentialSave] Edges inserted: ${stats.edges}, skipped: noSourceTarget=${edgesSkipped.noSourceTarget}, noSourceTargetNode=${edgesSkipped.noSourceTargetNode}`);
       }
 
+      
+      // ==================== DIFFERENTIAL SENSORS PROCESSING ====================
+      if (allFloorIds.length > 0 && changes.sensors) {
+        // PROCESS DELETIONS
+        for (const dbIdStr of changes.sensors.deleted) {
+          const dbId = parseInt(dbIdStr, 10);
+          if (!isNaN(dbId)) {
+            await queryRunner.query(`DELETE FROM "sensors" WHERE id = $1`, [dbId]);
+            stats.sensors.deleted++;
+          }
+        }
+
+        // PROCESS ADDITIONS
+        for (const feature of changes.sensors.added) {
+          const props = feature.properties;
+          
+          // NEW: If db_id is present, it means we are mapping a NEW map element to an EXISTING hardware sensor.
+          // In this case, we should UPDATE the existing sensor's building/floor/room instead of INSERTING.
+          if (props?.db_id) {
+            const dbId = parseInt(props.db_id, 10);
+            const level = props?.level || '1';
+            const floorId = await getFloorId(level);
+            const roomId = props?.linked_room_db_id ? parseInt(props?.linked_room_db_id) : null;
+            
+            await queryRunner.query(`
+              UPDATE "sensors" SET
+                room_id = $1,
+                floor_id = $2,
+                building_id = $3,
+                hardware_uid = $4,
+                updated_at = NOW()
+              WHERE id = $5
+            `, [roomId, floorId, buildingId, props?.hardware_uid || null, dbId]);
+            
+            idMappings.sensors[props.id] = dbId;
+            stats.sensors.added++;
+            continue;
+          }
+
+          const level = props?.level || '1';
+          const floorId = await getFloorId(level);
+          if (!floorId) {
+            warnings.push(`Sensor ${props?.name || props?.id}: could not get floor for level ${level}`);
+            continue;
+          }
+
+          const roomId = props?.linked_room_db_id ? parseInt(props?.linked_room_db_id) : null;
+          
+          const result = await queryRunner.query(`
+            INSERT INTO "sensors" (name, type, status, unit, value, room_id, floor_id, building_id, hardware_uid, created_at, updated_at)
+            VALUES ($1, $2, 'active', $3, 0, $4, $5, $6, $7, NOW(), NOW())
+            RETURNING id
+          `, [
+            props?.name || 'New Sensor',
+            props?.sensor_type || 'gas',
+            props?.unit || 'ppm',
+            roomId,
+            floorId,
+            buildingId,
+            props?.hardware_uid || null
+          ]);
+          
+          if (result.length > 0) {
+            idMappings.sensors[props.id] = result[0].id;
+            stats.sensors.added++;
+          }
+        }
+
+        // PROCESS MODIFICATIONS
+        for (const feature of changes.sensors.modified) {
+          const props = feature.properties;
+          if (!props?.db_id) continue;
+          
+          const dbId = toInt(props.db_id);
+          const level = props.level || '1';
+          const floorId = await getFloorId(level);
+          const roomId = props?.linked_room_db_id ? parseInt(props?.linked_room_db_id) : null;
+
+          await queryRunner.query(`
+            UPDATE "sensors" SET
+              name = $1,
+              type = $2,
+              unit = $3,
+              room_id = $4,
+              floor_id = $5,
+              hardware_uid = $6,
+              updated_at = NOW()
+            WHERE id = $7
+          `, [
+            props?.name || 'Sensor',
+            props?.sensor_type || 'gas',
+            props?.unit || 'ppm',
+            roomId,
+            floorId,
+            props?.hardware_uid || null,
+            dbId
+          ]);
+          stats.sensors.modified++;
+        }
+      }
+
       // ==================== DIFFERENTIAL SAFE POINTS PROCESSING ====================
       // Process safe points independently - only add/modify/delete what changed
       if (allFloorIds.length > 0 && changes.safePoints) {
@@ -2963,6 +3074,17 @@ export class BuildingController {
               return { ...camera, db_id: idMappings.cameras[camera.id] };
             }
             return camera;
+          });
+        }
+
+        
+        // Inject db_id into sensors
+        if (updatedEditorState.sensors && Array.isArray(updatedEditorState.sensors)) {
+          updatedEditorState.sensors = updatedEditorState.sensors.map((sen: any) => {
+            if (idMappings.sensors[sen.id]) {
+              return { ...sen, db_id: idMappings.sensors[sen.id] };
+            }
+            return sen;
           });
         }
 

@@ -41,6 +41,10 @@ export class CreateCameraDto {
   @IsBoolean()
   @IsOptional()
   is_fire_detection_enabled?: boolean;
+
+  @IsBoolean()
+  @IsOptional()
+  privacy_mode?: boolean;
 }
 
 export class UpdateCameraDto {
@@ -79,4 +83,8 @@ export class UpdateCameraDto {
   @IsBoolean()
   @IsOptional()
   is_fire_detection_enabled?: boolean;
+
+  @IsBoolean()
+  @IsOptional()
+  privacy_mode?: boolean;
 }

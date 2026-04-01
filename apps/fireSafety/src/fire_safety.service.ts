@@ -77,7 +77,7 @@
 //           io.emit('evacuationRoute.updated', { id: savedId, geojson });
 //         }
 //       } catch (emitErr) {
-//         console.warn('Could not emit evacuationRoute.updated', emitErr);
+//         this.debugWarn('Could not emit evacuationRoute.updated', emitErr);
 //       }
 
 //       return geojson;
@@ -130,7 +130,7 @@
 //       if (!res || res.length === 0 || !res[0].path_wkt) return null;
 //       return res[0].path_wkt;
 //     } catch (err) {
-//       console.warn('getPathWktIfExists query failed', err && err.message ? err.message : err);
+//       this.debugWarn('getPathWktIfExists query failed', err && err.message ? err.message : err);
 //       return null;
 //     }
 //   }
@@ -157,12 +157,12 @@
 //           const io = globalAny.__io || (globalAny.__appInstance && globalAny.__appInstance.get ? globalAny.__appInstance.get('io') : null);
 //           if (io && typeof io.emit === 'function') io.emit('evacuationRoute.updated', { id: insertedId, geojson });
 //         } catch (e) {
-//           console.warn('Failed to emit evacuationRoute.updated after save', e);
+//           this.debugWarn('Failed to emit evacuationRoute.updated after save', e);
 //         }
 //       }
 //       return insertedId;
 //     } catch (err) {
-//       console.warn('saveRouteFromWkt failed', err && err.message ? err.message : err);
+//       this.debugWarn('saveRouteFromWkt failed', err && err.message ? err.message : err);
 //       return null;
 //     }
 //   }
@@ -284,6 +284,20 @@ import { IsolatedLocationException } from './exceptions/isolated-location.except
 @Injectable()
 export class FireSafetyService {
   private readonly logger = new Logger(FireSafetyService.name);
+  private readonly fireSafetyDebugLogs =
+    (process.env.FIRE_SAFETY_DEBUG_LOGS || 'false').toLowerCase() === 'true';
+
+  private debugConsole(...args: unknown[]) {
+    if (this.fireSafetyDebugLogs) {
+      this.debugConsole(...args);
+    }
+  }
+
+  private debugWarn(...args: unknown[]) {
+    if (this.fireSafetyDebugLogs) {
+      this.debugWarn(...args);
+    }
+  }
 
   constructor(
     @InjectRepository(EvacuationRoute)
@@ -355,10 +369,10 @@ export class FireSafetyService {
     try {
       const result = await this.dataSource.query(query);
       const blockedIds = result.map((r: any) => r.id as number);
-      console.log(`Fire zone blocking: ${blockedIds.length} nodes blocked:`, blockedIds);
+      this.debugConsole(`Fire zone blocking: ${blockedIds.length} nodes blocked:`, blockedIds);
       return blockedIds;
     } catch (error) {
-      console.warn('Failed to get blocked nodes, falling back to hazard nodes only:', error.message);
+      this.debugWarn('Failed to get blocked nodes, falling back to hazard nodes only:', error.message);
       // Fallback to just hazard nodes (excluding those in hallways)
       const fallbackResult = await this.dataSource.query(
         `SELECT DISTINCT h.node_id as id
@@ -495,7 +509,7 @@ export class FireSafetyService {
         LIMIT 3
       `, [startNodeId]);
 
-      console.log(`[AutoRoute] Exit nodes found:`, exitResult?.map(e => `${e.id}(${e.type},${Math.round(e.distance)}m)`) || 'none');
+      this.debugConsole(`[AutoRoute] Exit nodes found:`, exitResult?.map(e => `${e.id}(${e.type},${Math.round(e.distance)}m)`) || 'none');
 
       if (exitResult && exitResult.length > 0) {
         endNodeId = exitResult[0].id;
@@ -518,7 +532,7 @@ export class FireSafetyService {
     // TC_01 FIX: Allow routing FROM fire zone (person needs to escape)
     // TC_02 FIX: If end node is in fire, redirect to safe point instead of error
     const fireCheck = await this.checkNodesForFire([startNodeId, endNodeId]);
-    console.log(`[FireCheck] Checking nodes [${startNodeId}, ${endNodeId}], result:`, fireCheck);
+    this.debugConsole(`[FireCheck] Checking nodes [${startNodeId}, ${endNodeId}], result:`, fireCheck);
 
     let effectiveEndNodeId = endNodeId;
     let endNodeInFire = false;
@@ -566,15 +580,15 @@ export class FireSafetyService {
 
         // If no safe point found, try to find nearest exit that's not in fire
         const alternateExit = await this.findNearestSafeExit(startNodeId);
-        console.log(`[FindExit] Alternate exit result:`, alternateExit);
+        this.debugConsole(`[FindExit] Alternate exit result:`, alternateExit);
         if (alternateExit) {
           effectiveEndNodeId = alternateExit.nodeId;
-          console.log(`[Redirect] Using alternate exit node ${effectiveEndNodeId} instead of fire zone ${endNodeId}`);
+          this.debugConsole(`[Redirect] Using alternate exit node ${effectiveEndNodeId} instead of fire zone ${endNodeId}`);
           this.logger.log(
             `Using alternate exit node ${effectiveEndNodeId} instead of fire zone ${endNodeId}`,
           );
         } else {
-          console.log(`[Redirect] No safe exit found - will proceed with isolation check`);
+          this.debugConsole(`[Redirect] No safe exit found - will proceed with isolation check`);
           // No alternatives - this will likely trigger isolation detection later
           this.logger.warn(
             `No safe alternatives found for fire zone destination ${endNodeId}`,
@@ -589,7 +603,7 @@ export class FireSafetyService {
     // ============================================
     // ROUTING ATTEMPT 1: Dijkstra (Primary)
     // ============================================
-    console.log(`Attempting route computation with Dijkstra (${startNodeId} -> ${effectiveEndNodeId})${startInFire ? ' [ESCAPE MODE]' : ''}...`);
+    this.debugConsole(`Attempting route computation with Dijkstra (${startNodeId} -> ${effectiveEndNodeId})${startInFire ? ' [ESCAPE MODE]' : ''}...`);
     let routeGeometry = await this.computeDijkstraWithHazardCosts(
       startNodeId,
       effectiveEndNodeId,
@@ -600,7 +614,7 @@ export class FireSafetyService {
     // ROUTING ATTEMPT 2: A* (Fallback 1)
     // ============================================
     if (!routeGeometry) {
-      console.log('Dijkstra failed, attempting A* algorithm...');
+      this.debugConsole('Dijkstra failed, attempting A* algorithm...');
       routeGeometry = await this.computeAStarRoute(startNodeId, effectiveEndNodeId, escapeFromFireNode);
     }
 
@@ -608,7 +622,7 @@ export class FireSafetyService {
     // ROUTING ATTEMPT 3: K-Shortest Paths (Fallback 2)
     // ============================================
     if (!routeGeometry) {
-      console.log('A* failed, attempting K-Shortest Paths...');
+      this.debugConsole('A* failed, attempting K-Shortest Paths...');
       routeGeometry = await this.computeKShortestPaths(startNodeId, effectiveEndNodeId, escapeFromFireNode);
     }
 
@@ -617,11 +631,11 @@ export class FireSafetyService {
     // ============================================
     // If all exit-seeking algorithms fail, route to the safest shelter-in-place location
     if (!routeGeometry) {
-      console.log('All exit routes failed, attempting safe point fallback...');
+      this.debugConsole('All exit routes failed, attempting safe point fallback...');
       try {
         const safePointResult = await this.findRouteToNearestSafePoint(startNodeId);
         if (safePointResult) {
-          console.log(`✓ Safe point fallback succeeded - routing to ${safePointResult.safePointName}`);
+          this.debugConsole(`✓ Safe point fallback succeeded - routing to ${safePointResult.safePointName}`);
           // Return directly as we already have the full response
           return {
             ...safePointResult.route,
@@ -631,7 +645,7 @@ export class FireSafetyService {
           };
         }
       } catch (safePointError) {
-        console.warn('Safe point fallback also failed:', safePointError.message);
+        this.debugWarn('Safe point fallback also failed:', safePointError.message);
       }
     }
 
@@ -852,10 +866,10 @@ export class FireSafetyService {
         return null;
       }
 
-      console.log('✓ Dijkstra with hazard costs succeeded');
+      this.debugConsole('✓ Dijkstra with hazard costs succeeded');
       return result[0].path_wkt;
     } catch (error) {
-      console.warn('Dijkstra with hazard costs failed:', error.message);
+      this.debugWarn('Dijkstra with hazard costs failed:', error.message);
       return null;
     }
   }
@@ -991,10 +1005,10 @@ export class FireSafetyService {
         return null;
       }
 
-      console.log('✓ A* algorithm succeeded');
+      this.debugConsole('✓ A* algorithm succeeded');
       return result[0].path_wkt;
     } catch (error) {
-      console.warn('A* algorithm failed:', error.message);
+      this.debugWarn('A* algorithm failed:', error.message);
       return null;
     }
   }
@@ -1127,10 +1141,10 @@ export class FireSafetyService {
         return null;
       }
 
-      console.log(`✓ K-Shortest Paths succeeded (K=${this.K_PATHS_COUNT})`);
+      this.debugConsole(`✓ K-Shortest Paths succeeded (K=${this.K_PATHS_COUNT})`);
       return result[0].path_wkt;
     } catch (error) {
-      console.warn('K-Shortest Paths failed:', error.message);
+      this.debugWarn('K-Shortest Paths failed:', error.message);
       return null;
     }
   }
@@ -1207,12 +1221,12 @@ export class FireSafetyService {
       const insertedId = insertRes && insertRes[0] ? insertRes[0].id : null;
 
       if (insertedId) {
-        console.log(`Route saved with ID: ${insertedId}`);
+        this.debugConsole(`Route saved with ID: ${insertedId}`);
       }
 
       return insertedId;
     } catch (err) {
-      console.warn(
+      this.debugWarn(
         'saveRouteFromWkt failed',
         err && err.message ? err.message : err,
       );
@@ -1263,7 +1277,7 @@ export class FireSafetyService {
         Object.assign(baseGeoJSON, enhancedGeoJSON);
       }
     } catch (e) {
-      console.warn('Could not enhance route with door nodes:', e.message);
+      this.debugWarn('Could not enhance route with door nodes:', e.message);
     }
 
     // Get floor-segmented route data for multi-floor visualization
@@ -1274,7 +1288,7 @@ export class FireSafetyService {
         baseGeoJSON.isMultiFloor = floorSegments.length > 1;
       }
     } catch (e) {
-      console.warn('Could not compute floor segments:', e.message);
+      this.debugWarn('Could not compute floor segments:', e.message);
     }
 
     return baseGeoJSON;
@@ -1413,7 +1427,7 @@ export class FireSafetyService {
 
       return geoJSON;
     } catch (e) {
-      console.warn('enhanceRouteWithDoorNodes failed:', e.message);
+      this.debugWarn('enhanceRouteWithDoorNodes failed:', e.message);
       return null;
     }
   }
@@ -1647,7 +1661,7 @@ export class FireSafetyService {
 
       return segments;
     } catch (e) {
-      console.warn('Multi-floor segment query failed:', e.message);
+      this.debugWarn('Multi-floor segment query failed:', e.message);
       // Fallback: return simple two-segment split
       return [
         {
@@ -1810,7 +1824,7 @@ export class FireSafetyService {
       route = await this.computeRoute(dto);
     } catch (e) {
       // Route computation might fail if already at safe point
-      console.warn('Could not compute route to safe point:', e.message);
+      this.debugWarn('Could not compute route to safe point:', e.message);
     }
 
     return {
@@ -1958,7 +1972,7 @@ export class FireSafetyService {
       const result = await this.dataSource.query(reachabilityQuery, [fromNodeId, toNodeId]);
       return result[0]?.path_count > 0;
     } catch (e) {
-      console.warn('Reachability check failed:', e.message);
+      this.debugWarn('Reachability check failed:', e.message);
       return false;
     }
   }
@@ -2016,7 +2030,7 @@ export class FireSafetyService {
       const safePoints = await this.dataSource.query(safePointsQuery, [currentNodeId]);
 
       if (!safePoints || safePoints.length === 0) {
-        console.warn('No unblocked safe points available');
+        this.debugWarn('No unblocked safe points available');
         return null;
       }
 
@@ -2087,7 +2101,7 @@ export class FireSafetyService {
 
       return null;
     } catch (error) {
-      console.warn('findRouteToNearestSafePoint failed:', error.message);
+      this.debugWarn('findRouteToNearestSafePoint failed:', error.message);
       return null;
     }
   }
@@ -2141,7 +2155,7 @@ export class FireSafetyService {
 
       return result[0].path_wkt;
     } catch (error) {
-      console.warn('computeSimplifiedRouteToSafePoint failed:', error.message);
+      this.debugWarn('computeSimplifiedRouteToSafePoint failed:', error.message);
       return null;
     }
   }
@@ -2198,7 +2212,7 @@ export class FireSafetyService {
         distance: exits[0].distance,
       };
     } catch (error) {
-      console.warn('findNearestSafeExit failed:', error.message);
+      this.debugWarn('findNearestSafeExit failed:', error.message);
       return null;
     }
   }
@@ -2287,7 +2301,7 @@ export class FireSafetyService {
         } catch (e) {
           skipped++;
           const errorMessage = e instanceof Error ? e.message : String(e);
-          console.warn(
+          this.debugWarn(
             `Could not compute route from ${a} to ${b}: ${errorMessage}`,
           );
         }
@@ -2346,3 +2360,4 @@ export class FireSafetyService {
     }
   }
 }
+

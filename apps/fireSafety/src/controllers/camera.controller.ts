@@ -12,6 +12,8 @@ import {
 } from '@nestjs/common';
 import { CameraService } from '../services/camera.service';
 import { CreateCameraDto, UpdateCameraDto } from '../dto/camera.dto';
+import { Roles } from '../decorators/roles.decorator';
+import { MANAGEMENT_ROLES } from '../enums/role.enum';
 import { JwtAuthGuard } from '../guards/jwt-auth.guard';
 import { Public } from '../decorators/public.decorator';
 
@@ -74,21 +76,25 @@ export class CameraController {
   }
 
   @Post()
+  @Roles(...MANAGEMENT_ROLES)
   create(@Body() createCameraDto: CreateCameraDto) {
     return this.cameraService.create(createCameraDto);
   }
 
   @Patch(':id')
+  @Roles(...MANAGEMENT_ROLES)
   update(@Param('id', ParseIntPipe) id: number, @Body() updateCameraDto: UpdateCameraDto) {
     return this.cameraService.update(id, updateCameraDto);
   }
 
   @Patch(':id/status')
+  @Roles(...MANAGEMENT_ROLES)
   updateStatus(@Param('id', ParseIntPipe) id: number, @Body('status') status: string) {
     return this.cameraService.updateStatus(id, status);
   }
 
   @Delete(':id')
+  @Roles(...MANAGEMENT_ROLES)
   remove(@Param('id', ParseIntPipe) id: number) {
     return this.cameraService.remove(id);
   }

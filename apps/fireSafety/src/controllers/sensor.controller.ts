@@ -1,6 +1,7 @@
 import { Controller, Get, Post, Body, Patch, Param, Delete, Query, UseGuards, ParseIntPipe } from '@nestjs/common';
 import { SensorService } from '../services/sensor.service';
 import { ArduinoSensorService } from '../services/arduino-sensor.service';
+import { SensorLogAggregationService } from '../services/sensor-log-aggregation.service';
 import { CreateSensorDto, UpdateSensorDto } from '../dto/sensor.dto';
 import { JwtAuthGuard } from '../guards/jwt-auth.guard';
 import { Public } from '../decorators/public.decorator';
@@ -11,6 +12,7 @@ export class SensorController {
   constructor(
     private sensorService: SensorService,
     private arduinoSensorService: ArduinoSensorService,
+    private aggregationService: SensorLogAggregationService,
   ) {}
 
   @Get()
@@ -57,5 +59,16 @@ export class SensorController {
   @Delete(':id')
   remove(@Param('id', ParseIntPipe) id: number) {
     return this.sensorService.remove(id);
+  }
+
+  @Get('logs/stats')
+  @Public()
+  async getLogStats() {
+    return this.aggregationService.getRetentionStats();
+  }
+
+  @Post('logs/aggregate')
+  async triggerAggregation() {
+    return this.aggregationService.triggerAggregationNow();
   }
 }

@@ -71,6 +71,7 @@ export class CameraService {
       ...createCameraDto,
       status: createCameraDto.status || 'active',
       is_fire_detection_enabled: createCameraDto.is_fire_detection_enabled ?? true,
+      privacy_mode: createCameraDto.privacy_mode ?? false,
     });
     return this.cameraRepository.save(cam);
   }

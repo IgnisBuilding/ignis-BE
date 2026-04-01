@@ -8,6 +8,7 @@ module.exports = function (options, webpack) {
     cache: isDevelopment ? false : options.cache,
     externals: {
       bcrypt: 'commonjs bcrypt',
+      serialport: 'commonjs serialport',
     },
     resolve: {
       ...options.resolve,

@@ -8,12 +8,15 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { Sensor } from '@app/entities';
+import { Sensor, camera } from '@app/entities';
+import * as http from 'http';
+import * as https from 'https';
 import {
   FireDetectionGateway,
   SensorReadingEvent,
 } from '../gateways/fire-detection.gateway';
 import { SensorService } from './sensor.service';
+import { FireDetectionService } from './fire-detection.service';
 
 type SensorKey = 'MQ7' | 'MQ5';
 type RuntimeStatus = 'safe' | 'warning' | 'alert';
@@ -22,11 +25,16 @@ type RuntimeStatus = 'safe' | 'warning' | 'alert';
 export class ArduinoSensorService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(ArduinoSensorService.name);
 
-  private readonly mode = (process.env.ARDUINO_MODE || 'mock').toLowerCase() as 'mock' | 'hardware';
+  private readonly mode = (process.env.ARDUINO_MODE || 'hardware').toLowerCase() as 'mock' | 'hardware' | 'off';
   private readonly comPort = process.env.ARDUINO_COM_PORT || 'COM3';
   private readonly baudRate = Number(process.env.ARDUINO_BAUD_RATE || 9600);
   private readonly reconnectMs = Number(process.env.ARDUINO_RECONNECT_MS || 5000);
   private readonly mockIntervalMs = Number(process.env.ARDUINO_MOCK_INTERVAL_MS || 2000);
+  private readonly autoDetectPort = (process.env.ARDUINO_AUTO_DETECT_PORTS || 'true').toLowerCase() === 'true';
+  private readonly portHints = (process.env.ARDUINO_PORT_HINTS || 'arduino,ch340,cp210,usb,ttyacm,ttyusb')
+    .split(',')
+    .map((hint) => hint.trim().toLowerCase())
+    .filter(Boolean);
 
   private readonly mq7Warning = Number(process.env.MQ7_WARNING_THRESHOLD || 300);
   private readonly mq7Alert = Number(process.env.MQ7_ALERT_THRESHOLD || 600);
@@ -46,11 +54,22 @@ export class ArduinoSensorService implements OnModuleInit, OnModuleDestroy {
   private lastError: string | null = null;
   private isConnected = false;
   private isMockTickRunning = false;
+  private activePortPath: string | null = null;
+  private missingPortNoticeShown = false;
+  private lastPortWarningTime = 0;
+  private portWarningCooldown = 30000; // Only warn every 30 seconds
+  private readonly debugMode = process.env.ARDUINO_DEBUG === 'true';
+  private readonly packetWarningCooldownMs = 60000;
+  private lastMissingMappingWarningAt: Partial<Record<SensorKey, number>> = {};
+  private lastPersistWarningAt: Partial<Record<SensorKey, number>> = {};
 
   constructor(
     @InjectRepository(Sensor)
     private readonly sensorRepository: Repository<Sensor>,
+    @InjectRepository(camera)
+    private readonly cameraRepository: Repository<camera>,
     private readonly sensorService: SensorService,
+    private readonly fireDetectionService: FireDetectionService,
     @Inject(forwardRef(() => FireDetectionGateway))
     private readonly gateway: FireDetectionGateway,
   ) {}
@@ -58,6 +77,17 @@ export class ArduinoSensorService implements OnModuleInit, OnModuleDestroy {
   async onModuleInit() {
     this.startedAt = new Date();
     await this.ensureSensorRegistry();
+
+    if (this.mode === 'off') {
+      this.logger.log('Arduino sensor stream is disabled (ARDUINO_MODE=off).');
+      this.gateway.emitSensorConnection({
+        source: 'arduino',
+        mode: 'hardware',
+        connected: false,
+        timestamp: Date.now(),
+      });
+      return;
+    }
 
     if (this.mode === 'hardware') {
       void this.connectHardware();
@@ -105,9 +135,11 @@ export class ArduinoSensorService implements OnModuleInit, OnModuleDestroy {
       this.sensorIdByKey.MQ5 = sensor.id;
     }
 
-    this.logger.log(
-      `Arduino sensor mapping ready: MQ7->${this.sensorIdByKey.MQ7}, MQ5->${this.sensorIdByKey.MQ5}`,
-    );
+    if (this.debugMode) {
+      this.logger.log(
+        `Arduino sensor mapping ready: MQ7->${this.sensorIdByKey.MQ7}, MQ5->${this.sensorIdByKey.MQ5}`,
+      );
+    }
   }
 
   private async findOrCreateSensor(name: string, type: string): Promise<Sensor> {
@@ -129,8 +161,9 @@ export class ArduinoSensorService implements OnModuleInit, OnModuleDestroy {
   }
 
   private startMockStream() {
-    this.logger.log(`Starting Arduino sensor mock stream (${this.mockIntervalMs}ms interval)`);
-
+    if (this.debugMode) {
+      this.logger.log(`Starting Arduino sensor mock stream (${this.mockIntervalMs}ms interval)`);
+    }
     this.isConnected = true;
 
     this.gateway.emitSensorConnection({
@@ -153,7 +186,9 @@ export class ArduinoSensorService implements OnModuleInit, OnModuleDestroy {
         .catch((error: unknown) => {
           const message = error instanceof Error ? error.message : String(error);
           this.lastError = message;
-          this.logger.warn(`Mock sensor tick failed: ${message}`);
+          if (this.debugMode) {
+            this.logger.warn(`Mock tick failed: ${message}`);
+          }
         })
         .finally(() => {
           this.isMockTickRunning = false;
@@ -166,27 +201,61 @@ export class ArduinoSensorService implements OnModuleInit, OnModuleDestroy {
       return;
     }
 
-    this.logger.log(`Connecting to Arduino on ${this.comPort} @ ${this.baudRate}`);
+    if (this.port) {
+      this.port.removeAllListeners?.();
+      this.port = null;
+    }
 
     const serialport = await import('serialport');
     const SerialPortCtor = serialport.SerialPort;
 
+    const targetPort = await this.resolveTargetPort(SerialPortCtor);
+    if (!targetPort) {
+      this.isConnected = false;
+      this.activePortPath = null;
+      this.lastError = 'No serial port detected';
+
+      const now = Date.now();
+      if (now - this.lastPortWarningTime > this.portWarningCooldown) {
+        this.logger.warn(`No Arduino attached. Waiting... (${this.comPort})`);
+        this.lastPortWarningTime = now;
+      }
+
+      this.gateway.emitSensorConnection({
+        source: 'arduino',
+        mode: 'hardware',
+        connected: false,
+        port: this.comPort,
+        timestamp: Date.now(),
+      });
+      this.scheduleReconnect();
+      return;
+    }
+
+    if (this.debugMode) {
+      this.logger.log(`Connecting to Arduino on ${targetPort} @ ${this.baudRate}`);
+    }
+
     this.port = new SerialPortCtor({
-      path: this.comPort,
+      path: targetPort,
       baudRate: this.baudRate,
       autoOpen: false,
     });
 
     this.port.on('open', () => {
-      this.logger.log(`Arduino serial port opened on ${this.comPort}`);
+      if (this.debugMode) {
+        this.logger.log(`Arduino serial port opened on ${targetPort}`);
+      }
       this.serialBuffer = '';
       this.isConnected = true;
+      this.activePortPath = targetPort;
       this.lastError = null;
+      this.lastPortWarningTime = 0;
       this.gateway.emitSensorConnection({
         source: 'arduino',
         mode: 'hardware',
         connected: true,
-        port: this.comPort,
+        port: targetPort,
         timestamp: Date.now(),
       });
     });
@@ -196,27 +265,41 @@ export class ArduinoSensorService implements OnModuleInit, OnModuleDestroy {
     });
 
     this.port.on('error', (error) => {
-      this.logger.error(`Arduino serial error: ${error.message}`);
+      const message = error?.message || 'Unknown serial error';
+      const missingPort = /file not found|cannot find|enoent|cannot open/i.test(message);
+      if (missingPort) {
+        const now = Date.now();
+        if (now - this.lastPortWarningTime > this.portWarningCooldown) {
+          this.logger.warn(`Arduino port unavailable. Retrying...`);
+          this.lastPortWarningTime = now;
+        }
+      } else if (this.debugMode) {
+        this.logger.error(`Arduino serial error: ${message}`);
+      }
       this.isConnected = false;
-      this.lastError = error.message;
+      this.activePortPath = null;
+      this.lastError = message;
       this.gateway.emitSensorConnection({
         source: 'arduino',
         mode: 'hardware',
         connected: false,
-        port: this.comPort,
+        port: targetPort,
         timestamp: Date.now(),
       });
       this.scheduleReconnect();
     });
 
     this.port.on('close', () => {
-      this.logger.warn(`Arduino serial port closed on ${this.comPort}`);
+      if (this.debugMode) {
+        this.logger.warn(`Arduino serial port closed on ${targetPort}`);
+      }
       this.isConnected = false;
+      this.activePortPath = null;
       this.gateway.emitSensorConnection({
         source: 'arduino',
         mode: 'hardware',
         connected: false,
-        port: this.comPort,
+        port: targetPort,
         timestamp: Date.now(),
       });
       this.scheduleReconnect();
@@ -224,11 +307,56 @@ export class ArduinoSensorService implements OnModuleInit, OnModuleDestroy {
 
     this.port.open((error) => {
       if (error) {
-        this.logger.error(`Failed to open serial port ${this.comPort}: ${error.message}`);
-        this.lastError = error.message;
+        const message = error?.message || 'Unknown open error';
+        const missingPort = /file not found|cannot find|enoent|cannot open/i.test(message);
+        if (missingPort) {
+          const now = Date.now();
+          if (now - this.lastPortWarningTime > this.portWarningCooldown) {
+            this.logger.warn(`Arduino not ready. Retrying...`);
+            this.lastPortWarningTime = now;
+          }
+        } else if (this.debugMode) {
+          this.logger.error(`Failed to open serial port: ${message}`);
+        }
+        this.lastError = message;
+        this.activePortPath = null;
         this.scheduleReconnect();
       }
     });
+  }
+
+  private async resolveTargetPort(SerialPortCtor: any): Promise<string | null> {
+    if (!this.autoDetectPort) {
+      return this.comPort;
+    }
+
+    const ports = await SerialPortCtor.list();
+    if (!Array.isArray(ports) || ports.length === 0) {
+      return null;
+    }
+
+    const configured = this.comPort.toLowerCase();
+    const exactMatch = ports.find((port: any) => String(port?.path || '').toLowerCase() === configured);
+    if (exactMatch?.path) {
+      return exactMatch.path;
+    }
+
+    const hintedMatch = ports.find((port: any) => {
+      const searchBlob = [
+        port?.path,
+        port?.friendlyName,
+        port?.manufacturer,
+        port?.vendorId,
+        port?.productId,
+        port?.serialNumber,
+      ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase();
+      return this.portHints.some((hint) => searchBlob.includes(hint));
+    });
+
+    return hintedMatch?.path || ports[0]?.path || null;
   }
 
   private scheduleReconnect() {
@@ -257,12 +385,16 @@ export class ArduinoSensorService implements OnModuleInit, OnModuleDestroy {
 
       const parsed = this.parseLine(line);
       if (!parsed) {
-        this.logger.warn(`Ignoring invalid Arduino packet: "${line}"`);
+        if (this.debugMode) {
+          this.logger.warn(`Invalid packet: "${line}"`);
+        }
         continue;
       }
 
       this.processPacket(parsed.key, parsed.value).catch((error) => {
-        this.logger.error(`Failed to process Arduino packet ${line}: ${error.message}`);
+        if (this.debugMode) {
+          this.logger.error(`Failed to process packet: ${error.message}`);
+        }
       });
     }
   }
@@ -270,6 +402,10 @@ export class ArduinoSensorService implements OnModuleInit, OnModuleDestroy {
   private parseLine(line: string): { key: SensorKey; value: number } | null {
     const match = line.match(/^([A-Za-z0-9_-]+)\s*:\s*(-?\d+(?:\.\d+)?)$/);
     if (!match) {
+      const fallbackMatch = line.match(/Sensor\s*Value\s*:\s*(-?\d+(?:\.\d+)?)/i);
+      if (fallbackMatch) {
+         return { key: 'MQ5', value: Number(fallbackMatch[1]) };
+      }
       return null;
     }
 
@@ -291,9 +427,22 @@ export class ArduinoSensorService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async processPacket(key: SensorKey, value: number) {
-    const sensorId = this.sensorIdByKey[key];
+    // 1. Try to find sensor by unique hardware_uid (Serial/MAC) first
+    let sensor = await this.sensorRepository.findOne({ where: { hardwareUid: key } });
+    let sensorId = sensor?.id;
+
+    // 2. Fallback to name/key mapping if no exact UID match
     if (!sensorId) {
-      this.logger.warn(`No sensor mapping found for key ${key}`);
+      sensorId = this.sensorIdByKey[key];
+    }
+
+    if (!sensorId) {
+      const now = Date.now();
+      const lastWarn = this.lastMissingMappingWarningAt[key] || 0;
+      if (now - lastWarn >= this.packetWarningCooldownMs) {
+        this.logger.warn(`No sensor mapping/UID found for key ${key}`);
+        this.lastMissingMappingWarningAt[key] = now;
+      }
       return;
     }
 
@@ -307,7 +456,19 @@ export class ArduinoSensorService implements OnModuleInit, OnModuleDestroy {
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error);
       this.lastError = message;
-      this.logger.warn(`Failed to persist Arduino reading for ${key}: ${message}`);
+      const now = Date.now();
+      const lastWarn = this.lastPersistWarningAt[key] || 0;
+      const transientDbIssue =
+        message.includes('Connection terminated unexpectedly') ||
+        message.includes('getaddrinfo EAI_AGAIN') ||
+        message.includes('ECONNRESET') ||
+        message.includes('timeout');
+
+      // Only surface transient DB issues when debugging; otherwise keep stream quiet.
+      if (now - lastWarn >= this.packetWarningCooldownMs && (!transientDbIssue || this.debugMode)) {
+        this.logger.warn(`Failed to persist Arduino reading for ${key}: ${message}`);
+        this.lastPersistWarningAt[key] = now;
+      }
       return;
     }
 
@@ -328,7 +489,100 @@ export class ArduinoSensorService implements OnModuleInit, OnModuleDestroy {
     this.gateway.emitSensorReading(readingEvent);
     if (status === 'alert') {
       this.gateway.emitSensorAlert(readingEvent);
+      this.fireDetectionService.recordSensorAlert(updatedSensor, value, Math.floor(Date.now() / 1000));
+      // Notify fire-detect pipeline orchestrator (if configured) to start camera capture
+      void this.triggerFireDetectPipeline(updatedSensor, value).catch((err) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        this.logger.warn(`Failed to notify fire-detect orchestrator: ${msg}`);
+      });
     }
+  }
+
+  private async triggerFireDetectPipeline(sensor: Sensor, sensorValue: number): Promise<void> {
+    const triggerUrl = process.env.FIRE_DETECT_TRIGGER_URL;
+    if (!triggerUrl) {
+      if (this.debugMode) this.logger.debug('FIRE_DETECT_TRIGGER_URL not configured; skipping pipeline trigger');
+      return;
+    }
+
+    const apiKey = process.env.FIRE_DETECT_TRIGGER_API_KEY;
+
+    // Prefer cameras in the same room, fallback to building
+    let cameras = [] as camera[];
+    if (sensor.roomId) {
+      cameras = await this.cameraRepository.find({ where: { room_id: sensor.roomId, status: 'active' } as any });
+    }
+
+    if ((!cameras || cameras.length === 0) && sensor.buildingId) {
+      cameras = await this.cameraRepository.find({ where: { building_id: sensor.buildingId, status: 'active' } as any });
+    }
+
+    if (!cameras || cameras.length === 0) {
+      this.logger.debug('No cameras found for sensor location; skipping pipeline trigger');
+      return;
+    }
+
+    for (const cam of cameras) {
+      if (!cam.is_fire_detection_enabled) continue;
+
+      const payload = {
+        camera_id: cam.camera_id,
+        rtsp_url: cam.rtsp_url,
+        reason: 'sensor_alert',
+        sensor_id: sensor.id,
+        sensor_value: sensorValue,
+        privacy_mode: cam.privacy_mode ?? false,
+        max_capture_seconds: parseInt(process.env.FIRE_DETECT_MAX_CAPTURE_SECONDS || '10', 10),
+      };
+
+      try {
+        await this.postJson(triggerUrl, payload, apiKey);
+        this.logger.log(`Requested fire-detect start for camera ${cam.camera_id}`);
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        this.logger.warn(`Failed to trigger fire-detect for camera ${cam.camera_id}: ${msg}`);
+      }
+    }
+  }
+
+  private async postJson(urlStr: string, data: any, apiKey?: string): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      try {
+        const u = new URL(urlStr);
+        const payload = JSON.stringify(data);
+        const lib = u.protocol === 'https:' ? https : http;
+        const options: any = {
+          hostname: u.hostname,
+          port: u.port ? Number(u.port) : u.protocol === 'https:' ? 443 : 80,
+          path: u.pathname + (u.search || ''),
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Content-Length': Buffer.byteLength(payload),
+          },
+        };
+        if (apiKey) options.headers['x-api-key'] = apiKey;
+
+        const req = lib.request(options, (res: any) => {
+          const chunks: any[] = [];
+          res.on('data', (chunk: any) => chunks.push(chunk));
+          res.on('end', () => {
+            if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {
+              resolve();
+            } else {
+              const body = Buffer.concat(chunks).toString('utf8');
+              reject(new Error(`Trigger request failed: ${res.statusCode} ${body}`));
+            }
+          });
+        });
+
+        req.on('error', (e: Error) => reject(e));
+        req.write(payload);
+        req.end();
+      } catch (e) {
+        reject(e);
+      }
+    });
   }
 
   private computeStatus(key: SensorKey, value: number): RuntimeStatus {
@@ -355,7 +609,9 @@ export class ArduinoSensorService implements OnModuleInit, OnModuleDestroy {
       source: 'arduino',
       mode: this.mode,
       connected: this.isConnected,
-      port: this.mode === 'hardware' ? this.comPort : null,
+      port: this.mode === 'hardware' ? this.activePortPath || this.comPort : null,
+      configuredPort: this.mode === 'hardware' ? this.comPort : null,
+      autoDetectPort: this.mode === 'hardware' ? this.autoDetectPort : null,
       baudRate: this.mode === 'hardware' ? this.baudRate : null,
       reconnectMs: this.reconnectMs,
       packetCount: this.packetCount,

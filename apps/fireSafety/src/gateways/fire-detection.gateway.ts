@@ -54,6 +54,14 @@ export interface SensorConnectionEvent {
 })
 export class FireDetectionGateway implements OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect {
   private readonly logger = new Logger(FireDetectionGateway.name);
+  private readonly sensorReadingDebugLogs =
+    (process.env.SENSOR_READING_DEBUG_LOGS || 'false').toLowerCase() === 'true';
+  private readonly websocketDebugLogs =
+    (process.env.WS_DEBUG_LOGS || 'false').toLowerCase() === 'true';
+  private readonly websocketLifecycleLogs =
+    (process.env.WS_LIFECYCLE_LOGS || 'false').toLowerCase() === 'true';
+  private lastNotReadyWarningAt = 0;
+  private readonly notReadyWarnCooldownMs = 60000;
 
   @WebSocketServer()
   server: Server;
@@ -62,19 +70,27 @@ export class FireDetectionGateway implements OnGatewayInit, OnGatewayConnection,
 
   private isReady(): boolean {
     if (!this.server) {
-      this.logger.warn('WebSocket server not initialized yet; skipping emit');
+      const now = Date.now();
+      if (this.websocketDebugLogs && now - this.lastNotReadyWarningAt >= this.notReadyWarnCooldownMs) {
+        this.logger.warn('WebSocket server not initialized yet; skipping emit');
+        this.lastNotReadyWarningAt = now;
+      }
       return false;
     }
     return true;
   }
 
   afterInit(server: Server) {
-    this.logger.log('Fire Detection WebSocket Gateway initialized');
+    if (this.websocketLifecycleLogs) {
+      this.logger.log('Fire Detection WebSocket Gateway initialized');
+    }
   }
 
   handleConnection(client: Socket) {
     this.connectedClients.add(client.id);
-    this.logger.log(`Client connected: ${client.id} (Total: ${this.connectedClients.size})`);
+    if (this.websocketLifecycleLogs) {
+      this.logger.log(`Client connected: ${client.id} (Total: ${this.connectedClients.size})`);
+    }
 
     // Send connection acknowledgment
     client.emit('connected', {
@@ -86,7 +102,9 @@ export class FireDetectionGateway implements OnGatewayInit, OnGatewayConnection,
 
   handleDisconnect(client: Socket) {
     this.connectedClients.delete(client.id);
-    this.logger.log(`Client disconnected: ${client.id} (Total: ${this.connectedClients.size})`);
+    if (this.websocketLifecycleLogs) {
+      this.logger.log(`Client disconnected: ${client.id} (Total: ${this.connectedClients.size})`);
+    }
   }
 
   /**
@@ -96,7 +114,9 @@ export class FireDetectionGateway implements OnGatewayInit, OnGatewayConnection,
   handleSubscribeBuilding(client: Socket, buildingId: number) {
     const room = `building:${buildingId}`;
     client.join(room);
-    this.logger.log(`Client ${client.id} subscribed to ${room}`);
+    if (this.websocketLifecycleLogs) {
+      this.logger.log(`Client ${client.id} subscribed to ${room}`);
+    }
 
     client.emit('subscribed', {
       room,
@@ -114,7 +134,9 @@ export class FireDetectionGateway implements OnGatewayInit, OnGatewayConnection,
   handleUnsubscribeBuilding(client: Socket, buildingId: number) {
     const room = `building:${buildingId}`;
     client.leave(room);
-    this.logger.log(`Client ${client.id} unsubscribed from ${room}`);
+    if (this.websocketLifecycleLogs) {
+      this.logger.log(`Client ${client.id} unsubscribed from ${room}`);
+    }
 
     return { event: 'unsubscribed', data: { room, buildingId } };
   }
@@ -135,9 +157,11 @@ export class FireDetectionGateway implements OnGatewayInit, OnGatewayConnection,
     const room = `building:${event.building_id}`;
     this.server.to(room).emit('fire.detected:building', event);
 
-    this.logger.log(
-      `Fire detection event emitted - Camera: ${event.camera_id}, Building: ${event.building_id}, Confidence: ${(event.confidence * 100).toFixed(1)}%`,
-    );
+    if (this.websocketDebugLogs) {
+      this.logger.log(
+        `Fire detection event emitted - Camera: ${event.camera_id}, Building: ${event.building_id}, Confidence: ${(event.confidence * 100).toFixed(1)}%`,
+      );
+    }
   }
 
   /**
@@ -151,7 +175,9 @@ export class FireDetectionGateway implements OnGatewayInit, OnGatewayConnection,
     this.server.emit('fire.resolved', data);
     this.server.to(`building:${data.building_id}`).emit('fire.resolved:building', data);
 
-    this.logger.log(`Fire resolved event emitted - Hazard: ${data.hazard_id}, Building: ${data.building_id}`);
+    if (this.websocketDebugLogs) {
+      this.logger.log(`Fire resolved event emitted - Hazard: ${data.hazard_id}, Building: ${data.building_id}`);
+    }
   }
 
   /**
@@ -167,7 +193,9 @@ export class FireDetectionGateway implements OnGatewayInit, OnGatewayConnection,
     if (buildingId) {
       this.server.to(`building:${buildingId}`).emit('hazard.created:building', hazard);
     }
-    this.logger.log(`Hazard created event emitted - ID: ${hazard.id}`);
+    if (this.websocketDebugLogs) {
+      this.logger.log(`Hazard created event emitted - ID: ${hazard.id}`);
+    }
   }
 
   /**
@@ -183,7 +211,9 @@ export class FireDetectionGateway implements OnGatewayInit, OnGatewayConnection,
     if (buildingId) {
       this.server.to(`building:${buildingId}`).emit('hazard.resolved:building', hazard);
     }
-    this.logger.log(`Hazard resolved event emitted - ID: ${hazard.id}`);
+    if (this.websocketDebugLogs) {
+      this.logger.log(`Hazard resolved event emitted - ID: ${hazard.id}`);
+    }
   }
 
   /**
@@ -200,9 +230,11 @@ export class FireDetectionGateway implements OnGatewayInit, OnGatewayConnection,
       this.server.to(`building:${event.building_id}`).emit('sensor.reading:building', event);
     }
 
-    this.logger.debug(
-      `Sensor reading emitted - ${event.sensor_key}=${event.value}${event.unit}, status=${event.status}`,
-    );
+    if (this.sensorReadingDebugLogs) {
+      this.logger.debug(
+        `Sensor reading emitted - ${event.sensor_key}=${event.value}${event.unit}, status=${event.status}`,
+      );
+    }
   }
 
   /**
@@ -234,9 +266,11 @@ export class FireDetectionGateway implements OnGatewayInit, OnGatewayConnection,
 
     this.server.emit('sensor.connection', event);
 
-    this.logger.log(
-      `Sensor source connection changed - mode=${event.mode}, connected=${event.connected}, port=${event.port ?? 'n/a'}`,
-    );
+    if (this.websocketDebugLogs) {
+      this.logger.log(
+        `Sensor source connection changed - mode=${event.mode}, connected=${event.connected}, port=${event.port ?? 'n/a'}`,
+      );
+    }
   }
 
   /**

@@ -1,9 +1,16 @@
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
-import { ValidationPipe } from '@nestjs/common';
+import { Logger, ValidationPipe, LogLevel } from '@nestjs/common';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  const logLevels = (process.env.NEST_LOG_LEVELS || 'warn,error')
+    .split(',')
+    .map((level) => level.trim())
+    .filter(Boolean) as LogLevel[];
+
+  const app = await NestFactory.create(AppModule, {
+    logger: logLevels,
+  });
 
   // Enable CORS for all origins
   app.enableCors({
@@ -21,6 +28,6 @@ async function bootstrap() {
   // The port is defined here! Listen on all network interfaces
   const port = process.env.PORT || 4000;
   await app.listen(port, '0.0.0.0');
-  console.log(`🔥 Fire Safety API is running on: http://0.0.0.0:${port}`);
+  Logger.log(`Fire Safety API is running on: http://0.0.0.0:${port}`, 'Bootstrap');
 }
 bootstrap();

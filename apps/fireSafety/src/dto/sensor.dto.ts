@@ -40,6 +40,10 @@ export class CreateSensorDto {
   @IsNumber()
   @IsOptional()
   longitude?: number;
+
+  @IsString()
+  @IsOptional()
+  hardwareUid?: string;
 }
 
 export class UpdateSensorDto {
@@ -62,4 +66,8 @@ export class UpdateSensorDto {
   @IsNumber()
   @IsOptional()
   longitude?: number;
+
+  @IsString()
+  @IsOptional()
+  hardwareUid?: string;
 }

@@ -3,6 +3,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { JwtModule } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
+import { ScheduleModule } from '@nestjs/schedule';
 import { FireSafetyController } from './fire_safety.controller';
 import { FireSafetyService } from './fire_safety.service';
 import {
@@ -38,6 +39,7 @@ import {
   FireBrigade,
   FireBrigadeState,
   FireBrigadeHQ,
+  SensorLog,
 } from '@app/entities';
 import { AuthController } from './controllers/auth.controller';
 import { SensorController } from './controllers/sensor.controller';
@@ -74,9 +76,11 @@ import { JwtStrategy } from './strategies/jwt.strategy';
 import { FireDetectionGateway } from './gateways/fire-detection.gateway';
 import { NavigationGateway } from './gateways/navigation.gateway';
 import { NavigationService } from './services/navigation.service';
+import { SensorLogAggregationService } from './services/sensor-log-aggregation.service';
 
 @Module({
   imports: [
+    ScheduleModule.forRoot(),
     ConfigModule.forRoot(),
     PassportModule,
     JwtModule.registerAsync({
@@ -120,6 +124,7 @@ import { NavigationService } from './services/navigation.service';
       FireBrigade,
       FireBrigadeState,
       FireBrigadeHQ,
+      SensorLog,
     ]),
   ],
   controllers: [
@@ -162,6 +167,7 @@ import { NavigationService } from './services/navigation.service';
     NotificationService,
     EmployeeService,
     ArduinoSensorService,
+    SensorLogAggregationService,
   ],
 })
 export class FireSafetyModule {}

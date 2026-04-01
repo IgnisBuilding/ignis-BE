@@ -15,4 +15,5 @@ export default new DataSource({
   database: process.env.DB_NAME || 'ignis',
   entities: [path.join(__dirname, 'libs/database/src/entities/*.entity{.ts,.js}')],
   migrations: [path.join(__dirname, 'libs/database/src/migrations/*.ts')],
+  synchronize: true, // AUTO-ADD COLS
 });

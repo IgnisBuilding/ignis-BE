@@ -55,6 +55,9 @@ export class Sensor {
     @Column({ type: 'geometry', spatialFeatureType: 'Point', srid: 3857, nullable: true })
     geometry: string;
 
+    @Column({ name: 'hardware_uid', nullable: true })
+    hardwareUid: string;
+
     @CreateDateColumn({ name: 'created_at' })
     createdAt: Date;
 
@@ -63,4 +66,10 @@ export class Sensor {
 
     @Column({ name: 'last_reading', type: 'timestamp', nullable: true })
     lastReading: Date;
+
+    @Column({ name: 'last_logged_value', type: 'numeric', precision: 10, scale: 2, nullable: true })
+    lastLoggedValue: number | null;
+
+    @Column({ name: 'last_logged_at', type: 'timestamp', nullable: true })
+    lastLoggedAt: Date | null;
 }
