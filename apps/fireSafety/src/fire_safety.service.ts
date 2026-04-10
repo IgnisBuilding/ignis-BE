@@ -520,7 +520,10 @@ export class FireSafetyService {
           type: 'FeatureCollection',
           features: [],
           isolated: true,
-          message: `No exit nodes found. Shelter in place.`,
+          // Unified shelter-in-place text — kept in sync with
+          // IsolatedLocationException.SHELTER_IN_PLACE_MESSAGE and the
+          // Android OfflineRoutingEngine.SHELTER_IN_PLACE_MESSAGE constant.
+          message: 'STAY WHERE YOU ARE — fire has blocked all exits. Shelter in place.',
         };
       }
     }

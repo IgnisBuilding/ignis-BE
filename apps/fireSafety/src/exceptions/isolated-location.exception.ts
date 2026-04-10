@@ -14,6 +14,14 @@ import {
  * and shelter-in-place instructions for the frontend to display.
  */
 export class IsolatedLocationException extends HttpException {
+  /**
+   * Unified shelter-in-place message shared across backend, web FE, and
+   * Android mobile client. Kept in sync with
+   * OfflineRoutingEngine.SHELTER_IN_PLACE_MESSAGE on the mobile side.
+   */
+  public static readonly SHELTER_IN_PLACE_MESSAGE =
+    'STAY WHERE YOU ARE — fire has blocked all exits. Shelter in place.';
+
   public readonly isolationInfo: IsolationInfo;
   public readonly trappedOccupantId: number | null;
 
@@ -56,29 +64,15 @@ export class IsolatedLocationException extends HttpException {
   }
 
   /**
-   * Generates a user-friendly message based on isolation reason
+   * Returns the unified shelter-in-place message. Previously returned a
+   * per-reason description (LOCATION_ON_FIRE, FIRE_BLOCKED_ALL_EXITS, etc.);
+   * those reason codes are still logged internally via
+   * isolationInfo.isolationReason so operators retain diagnostic context,
+   * but the user-visible text is now uniform across backend, web FE, and
+   * Android mobile client.
    */
-  private static generateMessage(isolationInfo: IsolationInfo): string {
-    switch (isolationInfo.isolationReason) {
-      case 'LOCATION_ON_FIRE':
-        return `CRITICAL: Your current location (${isolationInfo.nodeName}) is in the fire zone. Move to the safest corner of the room away from flames. Rescue team has been notified with CRITICAL priority.`;
-
-      case 'FIRE_BLOCKED_ALL_EXITS':
-        return `No evacuation path available from ${isolationInfo.nodeName}. All exits are blocked by fire. Shelter in place - rescue team has been notified and your location is ${isolationInfo.priorityLevel} priority.`;
-
-      case 'FIRE_BLOCKED_EXITS_HAS_SAFE_POINT':
-        return `Cannot reach exits from ${isolationInfo.nodeName}. A safe shelter point exists nearby but all exit routes are blocked. Shelter in place and wait for rescue team.`;
-
-      case 'STRUCTURAL_COLLAPSE':
-        return `Path blocked due to structural damage near ${isolationInfo.nodeName}. Stay away from unstable structures. Rescue team notified.`;
-
-      case 'SMOKE_FILLED_CORRIDORS':
-        return `Corridors from ${isolationInfo.nodeName} are filled with smoke. Do not attempt to traverse. Stay low, seal doors, and wait for rescue.`;
-
-      case 'NO_GRAPH_CONNECTIVITY':
-      default:
-        return `No evacuation route found from ${isolationInfo.nodeName}. This location appears to be isolated. Shelter in place and await rescue.`;
-    }
+  private static generateMessage(_isolationInfo: IsolationInfo): string {
+    return IsolatedLocationException.SHELTER_IN_PLACE_MESSAGE;
   }
 
   /**

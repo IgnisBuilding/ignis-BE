@@ -71,11 +71,6 @@ export enum RescueTeamStatus {
 export class IsolationDetectionService {
   private readonly logger = new Logger(IsolationDetectionService.name);
 
-  // Distance thresholds in meters
-  private readonly CRITICAL_FIRE_DISTANCE = 5; // meters - extremely close to fire
-  private readonly HIGH_RISK_FIRE_DISTANCE = 15; // meters - significant risk
-  private readonly SAFE_FIRE_DISTANCE = 30; // meters - relatively safer
-
   constructor(
     @InjectDataSource()
     private readonly dataSource: DataSource,
@@ -764,57 +759,24 @@ export class IsolationDetectionService {
   }
 
   /**
-   * Generates shelter-in-place instructions based on situation
+   * Returns the unified shelter-in-place message.
+   *
+   * Previously composed a multi-line, per-reason instruction block from
+   * isolationReason + room characteristics + fire distance. The per-reason
+   * text is now collapsed to a single line kept in sync with:
+   *   - IsolatedLocationException.SHELTER_IN_PLACE_MESSAGE (backend)
+   *   - OfflineRoutingEngine.SHELTER_IN_PLACE_MESSAGE (Android mobile client)
+   *
+   * Internal diagnostic context (isolationReason, priorityLevel, fire
+   * distance) is still logged and returned via isolationDetails; only the
+   * user-visible instruction text is unified.
    */
   private generateShelterInstructions(
-    isolationReason: IsolationReason,
-    roomCharacteristics: { hasWindow: boolean; hasExternalAccess: boolean },
-    nearestFireDistance: number | null,
+    _isolationReason: IsolationReason,
+    _roomCharacteristics: { hasWindow: boolean; hasExternalAccess: boolean },
+    _nearestFireDistance: number | null,
   ): string {
-    const instructions: string[] = [];
-
-    // Basic shelter instructions
-    instructions.push('SHELTER IN PLACE - Rescue team has been notified.');
-
-    // Fire proximity warnings
-    if (nearestFireDistance !== null) {
-      if (nearestFireDistance < this.CRITICAL_FIRE_DISTANCE) {
-        instructions.push(
-          '⚠️ CRITICAL: Fire very close. Move away from walls near fire.',
-        );
-      } else if (nearestFireDistance < this.HIGH_RISK_FIRE_DISTANCE) {
-        instructions.push(
-          '⚠️ Fire nearby. Stay low and away from smoke entry points.',
-        );
-      }
-    }
-
-    // Smoke protection
-    instructions.push('Seal gaps under doors with wet towels or cloth.');
-    instructions.push('Stay low to avoid smoke inhalation.');
-
-    // Window instructions
-    if (roomCharacteristics.hasWindow) {
-      instructions.push(
-        'If safe, open window slightly for fresh air. Signal for help.',
-      );
-      instructions.push('Do NOT jump unless absolutely necessary.');
-    }
-
-    // External access
-    if (roomCharacteristics.hasExternalAccess) {
-      instructions.push(
-        'External access point available - wait for rescue team instructions.',
-      );
-    }
-
-    // Communication
-    instructions.push(
-      'Call emergency services if not already done. Keep phone charged.',
-    );
-    instructions.push('Stay calm. Rescue team is prioritizing your location.');
-
-    return instructions.join('\n');
+    return 'STAY WHERE YOU ARE — fire has blocked all exits. Shelter in place.';
   }
 
   /**
