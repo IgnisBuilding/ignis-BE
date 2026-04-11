@@ -93,7 +93,7 @@ const DB_LOGGING = (process.env.DB_LOGGING || 'false').toLowerCase() === 'true';
       synchronize: false,
       migrationsRun: true,
       logging: DB_LOGGING,
-      migrations: [__dirname + '/migrations/*.ts'],
+      migrations: [__dirname + '/migrations/*{.ts,.js}'],
     }),
   ],
 })

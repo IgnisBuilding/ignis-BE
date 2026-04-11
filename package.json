@@ -6,6 +6,7 @@
   "private": true,
   "license": "UNLICENSED",
   "scripts": {
+    "prestart:dev": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/free-port-4000.ps1",
     "build": "nest build",
     "format": "prettier --write \"apps/**/*.ts\" \"libs/**/*.ts\"",
     "start": "nest start",

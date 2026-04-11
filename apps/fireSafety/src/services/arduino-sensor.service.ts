@@ -30,6 +30,9 @@ export class ArduinoSensorService implements OnModuleInit, OnModuleDestroy {
   private readonly baudRate = Number(process.env.ARDUINO_BAUD_RATE || 9600);
   private readonly reconnectMs = Number(process.env.ARDUINO_RECONNECT_MS || 5000);
   private readonly mockIntervalMs = Number(process.env.ARDUINO_MOCK_INTERVAL_MS || 2000);
+  private readonly autoCreateSensors = (process.env.ARDUINO_AUTO_CREATE_SENSORS || 'false').toLowerCase() === 'true';
+  private readonly enableLegacySensorValueFallback =
+    (process.env.ARDUINO_ENABLE_LEGACY_SENSOR_VALUE_FALLBACK || 'false').toLowerCase() === 'true';
   private readonly autoDetectPort = (process.env.ARDUINO_AUTO_DETECT_PORTS || 'true').toLowerCase() === 'true';
   private readonly portHints = (process.env.ARDUINO_PORT_HINTS || 'arduino,ch340,cp210,usb,ttyacm,ttyusb')
     .split(',')
@@ -62,6 +65,7 @@ export class ArduinoSensorService implements OnModuleInit, OnModuleDestroy {
   private readonly packetWarningCooldownMs = 60000;
   private lastMissingMappingWarningAt: Partial<Record<SensorKey, number>> = {};
   private lastPersistWarningAt: Partial<Record<SensorKey, number>> = {};
+  private lastHardwareLabelByKey: Partial<Record<SensorKey, string>> = {};
 
   constructor(
     @InjectRepository(Sensor)
@@ -125,12 +129,12 @@ export class ArduinoSensorService implements OnModuleInit, OnModuleDestroy {
       this.sensorIdByKey.MQ5 = Number(mq5IdEnv);
     }
 
-    if (!this.sensorIdByKey.MQ7) {
+    if (!this.sensorIdByKey.MQ7 && this.autoCreateSensors) {
       const sensor = await this.findOrCreateSensor('Arduino MQ-7', 'gas');
       this.sensorIdByKey.MQ7 = sensor.id;
     }
 
-    if (!this.sensorIdByKey.MQ5) {
+    if (!this.sensorIdByKey.MQ5 && this.autoCreateSensors) {
       const sensor = await this.findOrCreateSensor('Arduino MQ-5', 'gas');
       this.sensorIdByKey.MQ5 = sensor.id;
     }
@@ -152,7 +156,7 @@ export class ArduinoSensorService implements OnModuleInit, OnModuleDestroy {
       name,
       type,
       value: 0,
-      unit: 'ppm',
+      unit: 'adc',
       status: 'active',
       lastReading: new Date(),
     });
@@ -355,9 +359,23 @@ export class ArduinoSensorService implements OnModuleInit, OnModuleDestroy {
     }
 
     const configured = this.comPort.toLowerCase();
-    const exactMatch = ports.find((port: any) => String(port?.path || '').toLowerCase() === configured);
+    const exactMatch = ports.find((port: any) => {
+      const path = String(port?.path || '').toLowerCase();
+      return path === configured || path.endsWith(`\\${configured}`) || path.endsWith(`/${configured}`) || path.endsWith(configured);
+    });
     if (exactMatch?.path) {
       return exactMatch.path;
+    }
+
+    const configuredHintMatch = ports.find((port: any) => {
+      const searchBlob = [port?.path, port?.friendlyName, port?.manufacturer, port?.vendorId, port?.productId, port?.serialNumber]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase();
+      return searchBlob.includes(configured);
+    });
+    if (configuredHintMatch?.path) {
+      return configuredHintMatch.path;
     }
 
     const hintedMatch = ports.find((port: any) => {
@@ -419,10 +437,30 @@ export class ArduinoSensorService implements OnModuleInit, OnModuleDestroy {
   }
 
   private parseLine(line: string): { key: SensorKey; value: number } | null {
+    if (line.startsWith('MAP|')) {
+      const parts = line.split('|');
+      if (parts.length >= 4) {
+        const keyBlob = `${parts[1] || ''} ${parts[2] || ''}`.toLowerCase();
+        const analogValue = Number(parts[3]);
+
+        if (!Number.isNaN(analogValue)) {
+          if (keyBlob.includes('mq5')) {
+            this.lastHardwareLabelByKey.MQ5 = parts[2] || 'MQ-5';
+            return { key: 'MQ5', value: analogValue };
+          }
+
+          if (keyBlob.includes('mq7')) {
+            this.lastHardwareLabelByKey.MQ7 = parts[2] || 'MQ-7';
+            return { key: 'MQ7', value: analogValue };
+          }
+        }
+      }
+    }
+
     const match = line.match(/^([A-Za-z0-9_-]+)\s*:\s*(-?\d+(?:\.\d+)?)$/);
     if (!match) {
       const fallbackMatch = line.match(/Sensor\s*Value\s*:\s*(-?\d+(?:\.\d+)?)/i);
-      if (fallbackMatch) {
+      if (fallbackMatch && this.enableLegacySensorValueFallback) {
          return { key: 'MQ5', value: Number(fallbackMatch[1]) };
       }
       return null;
@@ -453,9 +491,20 @@ export class ArduinoSensorService implements OnModuleInit, OnModuleDestroy {
     // 2. Fallback to name/key mapping if no exact UID match
     if (!sensorId) {
       sensorId = this.sensorIdByKey[key];
+      if (sensorId) {
+        sensor = await this.sensorRepository.findOne({ where: { id: sensorId } });
+      }
     }
 
-    if (!sensorId) {
+    // 3. If hardware is connected but no DB sensor exists yet, register it from live packets.
+    if (!sensorId && (this.mode === 'hardware' || this.autoCreateSensors)) {
+      const label = this.lastHardwareLabelByKey[key] || `Arduino ${key}`;
+      sensor = await this.ensureHardwareSensor(key, label);
+      sensorId = sensor.id;
+      this.sensorIdByKey[key] = sensor.id;
+    }
+
+    if (!sensorId || !sensor) {
       const now = Date.now();
       const lastWarn = this.lastMissingMappingWarningAt[key] || 0;
       if (now - lastWarn >= this.packetWarningCooldownMs) {
@@ -465,13 +514,14 @@ export class ArduinoSensorService implements OnModuleInit, OnModuleDestroy {
       return;
     }
 
-    const status = this.computeStatus(key, value);
+    const status = this.computeStatus(key, value, sensor);
     this.lastPacketAt = new Date();
     this.packetCount += 1;
     let updatedSensor: Sensor;
+    const alertType = status === 'alert' ? (key === 'MQ7' ? 'fire_alert' : 'gas_detection_alert') : undefined;
 
     try {
-      updatedSensor = await this.sensorService.updateReading(sensorId, value, 'active');
+      updatedSensor = await this.sensorService.updateReading(sensorId, value, status, alertType);
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error);
       this.lastError = message;
@@ -497,7 +547,7 @@ export class ArduinoSensorService implements OnModuleInit, OnModuleDestroy {
       name: updatedSensor.name,
       type: updatedSensor.type,
       value,
-      unit: updatedSensor.unit || 'ppm',
+      unit: updatedSensor.unit || 'adc',
       status,
       timestamp: Date.now(),
       room_id: updatedSensor.roomId || undefined,
@@ -508,13 +558,71 @@ export class ArduinoSensorService implements OnModuleInit, OnModuleDestroy {
     this.gateway.emitSensorReading(readingEvent);
     if (status === 'alert') {
       this.gateway.emitSensorAlert(readingEvent);
-      this.fireDetectionService.recordSensorAlert(updatedSensor, value, Math.floor(Date.now() / 1000));
-      // Notify fire-detect pipeline orchestrator (if configured) to start camera capture
-      void this.triggerFireDetectPipeline(updatedSensor, value).catch((err) => {
-        const msg = err instanceof Error ? err.message : String(err);
-        this.logger.warn(`Failed to notify fire-detect orchestrator: ${msg}`);
-      });
+
+      // MQ-7 is treated as fire-risk and can drive fire detection orchestration.
+      if (key === 'MQ7') {
+        const eventTimestampSec = Math.floor(Date.now() / 1000);
+        this.fireDetectionService.recordSensorAlert(updatedSensor, value, eventTimestampSec);
+
+        // Emit an immediate fire event from sensor source so clients can alert even
+        // before camera confirmation arrives.
+        this.gateway.emitFireDetected({
+          camera_id: 'sensor:MQ7',
+          camera_name: updatedSensor.name || 'MQ-7 Sensor',
+          building_id: updatedSensor.buildingId || 0,
+          floor_id: updatedSensor.floorId || undefined,
+          room_id: updatedSensor.roomId || undefined,
+          confidence: 1,
+          timestamp: eventTimestampSec,
+          severity: 'high',
+          location_description: 'MQ-7 threshold exceeded',
+        });
+
+        // Notify fire-detect pipeline orchestrator (if configured) to start camera capture.
+        void this.triggerFireDetectPipeline(updatedSensor, value).catch((err) => {
+          const msg = err instanceof Error ? err.message : String(err);
+          this.logger.warn(`Failed to notify fire-detect orchestrator: ${msg}`);
+        });
+      }
     }
+  }
+
+  private async ensureHardwareSensor(key: SensorKey, label: string): Promise<Sensor> {
+    const existingByUid = await this.sensorRepository.findOne({ where: { hardwareUid: key } });
+    if (existingByUid) {
+      if (!existingByUid.name || /^arduino\s+mq-[57]$/i.test(existingByUid.name)) {
+        existingByUid.name = label;
+      }
+      if (!existingByUid.unit || existingByUid.unit === 'ppm') {
+        existingByUid.unit = 'adc';
+      }
+      existingByUid.status = existingByUid.status === 'safe' ? 'active' : existingByUid.status;
+      return this.sensorRepository.save(existingByUid);
+    }
+
+    const existingByName = await this.sensorRepository.findOne({ where: { name: label } });
+    if (existingByName) {
+      existingByName.hardwareUid = key;
+      if (!existingByName.unit || existingByName.unit === 'ppm') {
+        existingByName.unit = 'adc';
+      }
+      if (existingByName.status === 'safe') {
+        existingByName.status = 'active';
+      }
+      return this.sensorRepository.save(existingByName);
+    }
+
+    const created = this.sensorRepository.create({
+      name: label,
+      type: 'gas',
+      value: 0,
+      unit: 'adc',
+      status: 'active',
+      hardwareUid: key,
+      lastReading: new Date(),
+    });
+
+    return this.sensorRepository.save(created);
   }
 
   private async triggerFireDetectPipeline(sensor: Sensor, sensorValue: number): Promise<void> {
@@ -604,9 +712,17 @@ export class ArduinoSensorService implements OnModuleInit, OnModuleDestroy {
     });
   }
 
-  private computeStatus(key: SensorKey, value: number): RuntimeStatus {
-    const warningThreshold = key === 'MQ7' ? this.mq7Warning : this.mq5Warning;
-    const alertThreshold = key === 'MQ7' ? this.mq7Alert : this.mq5Alert;
+  private computeStatus(key: SensorKey, value: number, sensor?: Sensor): RuntimeStatus {
+    const warningThreshold = Number.isFinite(sensor?.warningThreshold as number)
+      ? Number(sensor?.warningThreshold)
+      : key === 'MQ7'
+        ? this.mq7Warning
+        : this.mq5Warning;
+    const alertThreshold = Number.isFinite(sensor?.alertThreshold as number)
+      ? Number(sensor?.alertThreshold)
+      : key === 'MQ7'
+        ? this.mq7Alert
+        : this.mq5Alert;
 
     if (value >= alertThreshold) {
       return 'alert';

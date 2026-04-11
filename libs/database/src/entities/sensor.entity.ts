@@ -24,6 +24,12 @@ export class Sensor {
     @Column()
     status: string;
 
+    @Column({ name: 'warning_threshold', type: 'float', nullable: true })
+    warningThreshold: number | null;
+
+    @Column({ name: 'alert_threshold', type: 'float', nullable: true })
+    alertThreshold: number | null;
+
     @Column({ name: 'room_id', nullable: true })
     roomId: number;
 

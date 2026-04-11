@@ -44,6 +44,14 @@ export class CreateSensorDto {
   @IsString()
   @IsOptional()
   hardwareUid?: string;
+
+  @IsNumber()
+  @IsOptional()
+  warningThreshold?: number;
+
+  @IsNumber()
+  @IsOptional()
+  alertThreshold?: number;
 }
 
 export class UpdateSensorDto {
@@ -70,4 +78,12 @@ export class UpdateSensorDto {
   @IsString()
   @IsOptional()
   hardwareUid?: string;
+
+  @IsNumber()
+  @IsOptional()
+  warningThreshold?: number;
+
+  @IsNumber()
+  @IsOptional()
+  alertThreshold?: number;
 }

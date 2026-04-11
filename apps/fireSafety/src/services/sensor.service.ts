@@ -48,7 +48,7 @@ export class SensorService {
     return this.sensorRepository.save(sensor);
   }
 
-  async updateReading(id: number, value: number, status?: string) {
+  async updateReading(id: number, value: number, status?: string, alertTypeOverride?: string) {
     // Environment-controlled thresholds for smart logging
     const DELTA_THRESHOLD = parseFloat(process.env.SENSOR_LOG_DELTA_THRESHOLD || '5');
     const MIN_LOG_INTERVAL = parseInt(process.env.SENSOR_LOG_MIN_INTERVAL || '60000'); // 60 seconds
@@ -59,7 +59,12 @@ export class SensorService {
     };
 
     if (status) {
-      updatePayload.status = status;
+      // Keep runtime status for alert logic, but persist a DB-safe state because
+      // some deployed schemas only allow active/inactive/maintenance values.
+      updatePayload.status =
+        status === 'safe' || status === 'warning' || status === 'alert'
+          ? 'active'
+          : status;
     }
 
     const updateResult = await this.sensorRepository.update(id, updatePayload);
@@ -70,6 +75,10 @@ export class SensorService {
     const sensor = await this.sensorRepository.findOne({ where: { id } });
     if (!sensor) {
       throw new NotFoundException(`Sensor with ID ${id} not found`);
+    }
+
+    if (sensor.hardwareUid === 'MQ5' || sensor.hardwareUid === 'MQ7' || /^Arduino MQ-[57]$/i.test(sensor.name)) {
+      updatePayload.unit = 'adc';
     }
 
     // Decide whether to write to sensor_log based on smart logging strategy
@@ -112,7 +121,7 @@ export class SensorService {
             value,
             unit: sensor.unit,
             isAlert,
-            alertType: isAlert ? `${sensor.type}_threshold_exceeded` : null,
+            alertType: isAlert ? alertTypeOverride || `${sensor.type}_threshold_exceeded` : null,
           })
         );
 
@@ -137,8 +146,9 @@ export class SensorService {
   async getStats() {
     const total = await this.sensorRepository.count();
     const active = await this.sensorRepository.count({ where: { status: 'active' } });
+    const warning = await this.sensorRepository.count({ where: { status: 'warning' } });
     const alert = await this.sensorRepository.count({ where: { status: 'alert' } });
     const inactive = await this.sensorRepository.count({ where: { status: 'inactive' } });
-    return { total, active, alert, inactive };
+    return { total, active, warning, alert, inactive };
   }
 }
