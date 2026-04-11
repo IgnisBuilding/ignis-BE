@@ -24,7 +24,7 @@
     "migrate:up": "typeorm-ts-node-commonjs migration:run -d ./data_source.ts",
     "migrate:down": "typeorm-ts-node-commonjs migration:revert -d ./data_source.ts",
     "migrate:status": "psql -U postgres -d ignis -c \"SELECT name FROM typeorm_migrations ORDER BY id DESC;\"",
-    "bridge:device": "node scripts/device-bridge.js"
+    "bridge:device": "node ../device-bridge/device-bridge.js"
   },
   "dependencies": {
     "@nestjs/common": "^11.1.7",
