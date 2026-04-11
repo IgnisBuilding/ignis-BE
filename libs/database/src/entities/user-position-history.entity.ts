@@ -77,8 +77,6 @@ export class UserPositionHistory {
   })
   accuracyMeters: number;
 
-  @Column({ name: 'device_id', length: 100, nullable: true })
-  deviceId: string;
 
   @Column({ name: 'position_source', length: 20, nullable: true })
   positionSource: string;

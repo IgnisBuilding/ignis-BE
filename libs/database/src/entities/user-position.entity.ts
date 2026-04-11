@@ -23,9 +23,6 @@ export class UserPosition {
   @JoinColumn({ name: 'user_id' })
   user: User;
 
-  @Column({ name: 'device_id', length: 100, nullable: true })
-  deviceId: string;
-
   @Column({ name: 'building_id' })
   buildingId: number;
 

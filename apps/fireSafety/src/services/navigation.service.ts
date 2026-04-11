@@ -44,7 +44,6 @@ export class NavigationService {
   private readonly APPROACH_THRESHOLD = 10; // meters
   private readonly REACHED_THRESHOLD = 3; // meters
   private readonly WALKING_SPEED = 1.2; // m/s
-  private deviceIdColumnSupported: boolean | null = null;
 
   constructor(
     @InjectRepository(UserPosition)
@@ -79,23 +78,14 @@ export class NavigationService {
     speed?: number;
     confidence?: number;
     sensor_data?: object;
-    device_id?: string;
     position_source?: string;
   }): Promise<UserPosition> {
     const isAnonymous = !data.user_id || data.user_id <= 0;
-    const supportsDeviceId = await this.hasDeviceIdColumn();
 
-    // Find existing position: by device_id when supported, otherwise by user_id
-    let position: UserPosition | null = null;
-    if (supportsDeviceId && isAnonymous && data.device_id) {
-      position = await this.positionRepo.findOne({
-        where: { deviceId: data.device_id },
-      });
-    } else {
-      position = await this.positionRepo.findOne({
-        where: { userId: data.user_id },
-      });
-    }
+    // Find existing position by user_id only.
+    let position = await this.positionRepo.findOne({
+      where: { userId: data.user_id },
+    });
 
     const nearestNodeId = data.node_id || (await this.findNearestNodeId(data.x, data.y, data.floor_id));
 
@@ -131,10 +121,6 @@ export class NavigationService {
         status: 'active',
       };
 
-      if (supportsDeviceId && data.device_id) {
-        positionData.deviceId = data.device_id;
-      }
-
       position = this.positionRepo.create(positionData);
     }
 
@@ -154,10 +140,6 @@ export class NavigationService {
         positionSource: data.position_source || 'wifi',
       };
 
-      if (supportsDeviceId && data.device_id) {
-        historyData.deviceId = data.device_id;
-      }
-
       const historyEntry = this.positionHistoryRepo.create(historyData);
       await this.positionHistoryRepo.save(historyEntry);
     } catch (histErr) {
@@ -167,19 +149,7 @@ export class NavigationService {
     return saved;
   }
 
-  async getLatestPosition(userId: number, deviceId?: string): Promise<UserPosition | null> {
-    const supportsDeviceId = await this.hasDeviceIdColumn();
-
-    if (supportsDeviceId && deviceId) {
-      const byDevice = await this.positionRepo.findOne({
-        where: { deviceId },
-      });
-
-      if (byDevice) {
-        return byDevice;
-      }
-    }
-
+  async getLatestPosition(userId: number): Promise<UserPosition | null> {
     return this.positionRepo.findOne({
       where: { userId },
     });
@@ -205,29 +175,6 @@ export class NavigationService {
     );
 
     return result[0]?.id || null;
-  }
-
-  private async hasDeviceIdColumn(): Promise<boolean> {
-    if (this.deviceIdColumnSupported !== null) {
-      return this.deviceIdColumnSupported;
-    }
-
-    const rows = await this.dataSource.query(
-      `
-      SELECT 1
-      FROM information_schema.columns
-      WHERE table_name = 'user_positions'
-        AND column_name = 'device_id'
-      LIMIT 1
-    `,
-    );
-
-    this.deviceIdColumnSupported = rows.length > 0;
-    if (!this.deviceIdColumnSupported) {
-      this.logger.warn('device_id column missing from user_positions; falling back to user_id-only tracking');
-    }
-
-    return this.deviceIdColumnSupported;
   }
 
   // ═══════════════════════════════════════════════════════════════

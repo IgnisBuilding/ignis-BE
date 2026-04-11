@@ -58,7 +58,6 @@ export class NavigationController {
         heading: dto.heading,
         speed: dto.speed,
         confidence: dto.confidence,
-        device_id: dto.device_id,
         position_source: dto.position_source,
       });
 
@@ -157,7 +156,7 @@ export class NavigationController {
             last_update: Date.now(),
           });
 
-        // Persist in DB (now supports anonymous users via device_id)
+        // Persist in DB using user_id-based tracking
         await this.navigationService.updatePosition({
           user_id: dto.user_id,
           building_id: dto.building_id,
@@ -169,7 +168,6 @@ export class NavigationController {
           heading: dto.heading,
           speed: dto.speed,
           confidence: dto.confidence,
-          device_id: dto.device_id,
           position_source: dto.position_source,
         });
 
