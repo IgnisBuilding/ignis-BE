@@ -16,6 +16,8 @@ import { CreateRouteDto } from './dto/CreateRoute.dto';
 import { DataSource } from 'typeorm';
 import { PlaceFiresDto } from './dto/PlaceFires.dto';
 import { FindSafestPointDto } from './dto/FindSafestPoint.dto';
+import { FireDetectionGateway } from './gateways/fire-detection.gateway';
+import { NotificationService } from './services/notification.service';
 
 @Controller('fireSafety')
 export class FireSafetyController {
@@ -23,6 +25,8 @@ export class FireSafetyController {
     private readonly fireSafetyService: FireSafetyService,
     private readonly isolationDetectionService: IsolationDetectionService,
     private readonly dataSource: DataSource,
+    private readonly fireDetectionGateway: FireDetectionGateway,
+    private readonly notificationService: NotificationService,
   ) {}
 
   @Get('emergency/exits')
@@ -520,6 +524,33 @@ export class FireSafetyController {
 
         if (result && result[0]) {
           hazardIds.push(result[0].id);
+
+          // Real-time WebSocket emission — mirrors POST /hazards flow at
+          // hazard.controller.ts:52. Room scoping is handled by
+          // fire-detection.gateway.ts:191 via the flat building_id fallback.
+          this.fireDetectionGateway.emitHazardCreated({
+            id: result[0].id,
+            node_id: zone.nodeId,
+            type: dto.type,
+            severity: dto.severity,
+            status: dto.status,
+            building_id: dto.buildingId,
+            apartment_id: apartmentId,
+          });
+
+          // Persist durable notification for rescue teams. Non-blocking:
+          // persistence failure must not fail the REST response.
+          try {
+            await this.notificationService.create({
+              type: 'fire_alert',
+              priority: 'high',
+              title: 'Fire Placed',
+              message: `Fire hazard placed at ${zone.roomName} (building ${dto.buildingId}).`,
+              roleTarget: 'firefighter_district',
+            });
+          } catch (err) {
+            console.error('Failed to persist fire_alert notification:', err);
+          }
         }
       }
 

@@ -188,7 +188,7 @@ export class FireDetectionGateway implements OnGatewayInit, OnGatewayConnection,
       return;
     }
 
-    const buildingId = hazard.floor?.building_id || hazard.floorId;
+    const buildingId = hazard.floor?.building_id || hazard.building_id || hazard.floorId;
     this.server.emit('hazard.created', hazard);
     if (buildingId) {
       this.server.to(`building:${buildingId}`).emit('hazard.created:building', hazard);
