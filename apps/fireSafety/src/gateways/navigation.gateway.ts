@@ -228,7 +228,10 @@ export class NavigationGateway
       this.userToSocket.set(payload.user_id, client.id);
 
       // Get user's current position
-      const position = await this.navigationService.getLatestPosition(payload.user_id);
+      const position = await this.navigationService.getLatestPosition(
+        payload.user_id,
+        payload.device_id,
+      );
 
       if (!position) {
         client.emit('navigation.error', {

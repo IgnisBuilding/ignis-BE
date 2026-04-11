@@ -23,7 +23,8 @@
     "migrate:generate": "node -e \"const n=process.argv[1]; const {execSync}=require('child_process'); execSync(`typeorm-ts-node-commonjs migration:generate -d ./data_source.ts ./libs/database/src/migrations/${n}`, {stdio:'inherit'})\"",
     "migrate:up": "typeorm-ts-node-commonjs migration:run -d ./data_source.ts",
     "migrate:down": "typeorm-ts-node-commonjs migration:revert -d ./data_source.ts",
-    "migrate:status": "psql -U postgres -d ignis -c \"SELECT name FROM typeorm_migrations ORDER BY id DESC;\""
+    "migrate:status": "psql -U postgres -d ignis -c \"SELECT name FROM typeorm_migrations ORDER BY id DESC;\"",
+    "bridge:device": "node ../device-bridge/device-bridge.js"
   },
   "dependencies": {
     "@nestjs/common": "^11.1.7",

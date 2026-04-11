@@ -330,7 +330,26 @@ export class ArduinoSensorService implements OnModuleInit, OnModuleDestroy {
       return this.comPort;
     }
 
-    const ports = await SerialPortCtor.list();
+    let ports: any[] = [];
+    try {
+      ports = await SerialPortCtor.list();
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.lastError = `Serial port discovery failed: ${message}`;
+
+      // Some environments (containers/minimal Linux images) don't provide udevadm.
+      // In that case, fall back to configured port instead of crashing startup.
+      if (/udevadm|enoent|spawn/i.test(message)) {
+        this.logger.warn(
+          `Serial auto-detect unavailable (${message}). Falling back to configured port ${this.comPort}.`,
+        );
+        return this.comPort;
+      }
+
+      this.logger.warn(`Serial port discovery failed: ${message}. Falling back to configured port ${this.comPort}.`);
+      return this.comPort;
+    }
+
     if (!Array.isArray(ports) || ports.length === 0) {
       return null;
     }
