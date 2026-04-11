@@ -5,6 +5,7 @@ import {
   ValidateNested,
   IsInt,
   IsNumber,
+  IsOptional,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 
@@ -50,6 +51,10 @@ const HAZARD_TYPES = ['fire', 'smoke', 'gas_leak', 'structural', 'electrical', '
  * DTO for placing multiple fire zones
  */
 export class PlaceFiresDto {
+  @IsOptional()
+  @IsInt()
+  buildingId?: number;
+
   @IsArray()
   @ValidateNested({ each: true })
   @Type(() => FireZoneDto)
