@@ -66,6 +66,8 @@ export class ArduinoSensorService implements OnModuleInit, OnModuleDestroy {
   private lastMissingMappingWarningAt: Partial<Record<SensorKey, number>> = {};
   private lastPersistWarningAt: Partial<Record<SensorKey, number>> = {};
   private lastHardwareLabelByKey: Partial<Record<SensorKey, string>> = {};
+  private lastValueByKey: Partial<Record<SensorKey, number>> = {};
+  private lastSeenAtByKey: Partial<Record<SensorKey, Date>> = {};
 
   constructor(
     @InjectRepository(Sensor)
@@ -484,9 +486,15 @@ export class ArduinoSensorService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async processPacket(key: SensorKey, value: number) {
+    this.lastValueByKey[key] = value;
+    this.lastSeenAtByKey[key] = new Date();
+
     // 1. Try to find sensor by unique hardware_uid (Serial/MAC) first
     let sensor = await this.sensorRepository.findOne({ where: { hardwareUid: key } });
     let sensorId = sensor?.id;
+    if (sensorId) {
+      this.sensorIdByKey[key] = sensorId;
+    }
 
     // 2. Fallback to name/key mapping if no exact UID match
     if (!sensorId) {
@@ -563,20 +571,6 @@ export class ArduinoSensorService implements OnModuleInit, OnModuleDestroy {
       if (key === 'MQ7') {
         const eventTimestampSec = Math.floor(Date.now() / 1000);
         this.fireDetectionService.recordSensorAlert(updatedSensor, value, eventTimestampSec);
-
-        // Emit an immediate fire event from sensor source so clients can alert even
-        // before camera confirmation arrives.
-        this.gateway.emitFireDetected({
-          camera_id: 'sensor:MQ7',
-          camera_name: updatedSensor.name || 'MQ-7 Sensor',
-          building_id: updatedSensor.buildingId || 0,
-          floor_id: updatedSensor.floorId || undefined,
-          room_id: updatedSensor.roomId || undefined,
-          confidence: 1,
-          timestamp: eventTimestampSec,
-          severity: 'high',
-          location_description: 'MQ-7 threshold exceeded',
-        });
 
         // Notify fire-detect pipeline orchestrator (if configured) to start camera capture.
         void this.triggerFireDetectPipeline(updatedSensor, value).catch((err) => {
@@ -755,6 +749,12 @@ export class ArduinoSensorService implements OnModuleInit, OnModuleDestroy {
       lastError: this.lastError,
       startedAt: this.startedAt.toISOString(),
       sensorMapping: this.sensorIdByKey,
+      detectedSensors: (Object.keys(this.lastSeenAtByKey) as SensorKey[]).map((key) => ({
+        key,
+        label: this.lastHardwareLabelByKey[key] || key,
+        lastValue: this.lastValueByKey[key] ?? null,
+        lastSeenAt: this.lastSeenAtByKey[key]?.toISOString() ?? null,
+      })),
       thresholds: {
         MQ7: {
           warning: this.mq7Warning,
