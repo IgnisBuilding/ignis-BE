@@ -577,6 +577,13 @@ export class ArduinoSensorService implements OnModuleInit, OnModuleDestroy {
           const msg = err instanceof Error ? err.message : String(err);
           this.logger.warn(`Failed to notify fire-detect orchestrator: ${msg}`);
         });
+
+        // Forward sensor alert to deployed backend so its AND logic can combine
+        // with camera detections already routed there by fire-detect.
+        void this.forwardSensorAlertToDeployed(updatedSensor, eventTimestampSec).catch((err) => {
+          const msg = err instanceof Error ? err.message : String(err);
+          this.logger.warn(`Failed to forward sensor alert to deployed backend: ${msg}`);
+        });
       }
     }
   }
@@ -617,6 +624,24 @@ export class ArduinoSensorService implements OnModuleInit, OnModuleDestroy {
     });
 
     return this.sensorRepository.save(created);
+  }
+
+  private async forwardSensorAlertToDeployed(sensor: Sensor, timestampSec: number): Promise<void> {
+    const deployedUrl = process.env.DEPLOYED_BACKEND_URL;
+    if (!deployedUrl) return;
+
+    const apiKey = process.env.FIRE_DETECT_API_KEY;
+    const payload = {
+      room_id: sensor.roomId ?? undefined,
+      floor_id: sensor.floorId ?? undefined,
+      building_id: sensor.buildingId ?? undefined,
+      timestamp: timestampSec,
+    };
+
+    await this.postJson(`${deployedUrl}/fire-detection/sensor-alert`, payload, apiKey);
+    this.logger.log(
+      `Forwarded MQ7 sensor alert to deployed backend (building=${sensor.buildingId ?? 'n/a'}, room=${sensor.roomId ?? 'n/a'})`,
+    );
   }
 
   private async triggerFireDetectPipeline(sensor: Sensor, sensorValue: number): Promise<void> {

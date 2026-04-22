@@ -112,3 +112,22 @@ export class UpdateFireAlertConfigDto {
   @IsOptional()
   auto_notify_firefighters?: boolean;
 }
+
+// Forwarded sensor alert from a local ignis-BE instance (for deployed-backend AND logic)
+export class SensorAlertForwardDto {
+  @IsNumber()
+  @IsOptional()
+  room_id?: number;
+
+  @IsNumber()
+  @IsOptional()
+  floor_id?: number;
+
+  @IsNumber()
+  @IsOptional()
+  building_id?: number;
+
+  @IsNumber()
+  @IsNotEmpty()
+  timestamp: number;
+}
