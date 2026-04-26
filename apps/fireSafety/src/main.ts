@@ -1,8 +1,11 @@
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { Logger, ValidationPipe, LogLevel } from '@nestjs/common';
+import { validateAiConfig } from './lib/ai-config';
 
 async function bootstrap() {
+  validateAiConfig();
+
   const logLevels = (process.env.NEST_LOG_LEVELS || 'warn,error')
     .split(',')
     .map((level) => level.trim())

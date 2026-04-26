@@ -37,6 +37,8 @@ import { Alert } from './entities/alert.entity';
 import { SafetyEquipment } from './entities/safety_equipment.entity';
 import { Fingerprint } from './entities/fingerprint.entity';
 import { UserSettings } from './entities/user-settings.entity';
+import { McpChatSession } from './entities/mcp_chat_session.entity';
+import { McpChatMessage } from './entities/mcp_chat_message.entity';
 
 const DB_LOGGING = (process.env.DB_LOGGING || 'false').toLowerCase() === 'true';
 
@@ -89,6 +91,8 @@ const DB_LOGGING = (process.env.DB_LOGGING || 'false').toLowerCase() === 'true';
         SafetyEquipment,
         Fingerprint,
         UserSettings,
+        McpChatSession,
+        McpChatMessage,
       ],
       synchronize: false,
       migrationsRun: true,
@@ -97,5 +101,5 @@ const DB_LOGGING = (process.env.DB_LOGGING || 'false').toLowerCase() === 'true';
     }),
   ],
 })
-export class DatabaseModule {}
+export class DatabaseModule { }
 

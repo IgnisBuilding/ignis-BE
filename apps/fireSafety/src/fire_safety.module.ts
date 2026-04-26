@@ -1,4 +1,4 @@
-import { Module, forwardRef } from '@nestjs/common';
+import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { JwtModule } from '@nestjs/jwt';
@@ -77,16 +77,22 @@ import { FireDetectionGateway } from './gateways/fire-detection.gateway';
 import { NavigationGateway } from './gateways/navigation.gateway';
 import { NavigationService } from './services/navigation.service';
 import { SensorLogAggregationService } from './services/sensor-log-aggregation.service';
+import { McpModule } from './mcp/mcp.module';
+import { ChatModule } from './chat/chat.module';
 
 @Module({
   imports: [
     ScheduleModule.forRoot(),
     ConfigModule.forRoot(),
+    McpModule,
+    ChatModule,
     PassportModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],
-      useFactory: async (configService: ConfigService) => ({
-        secret: configService.get('JWT_SECRET') || 'your-secret-key-change-in-production',
+      useFactory: (configService: ConfigService) => ({
+        secret:
+          configService.get('JWT_SECRET') ||
+          'your-secret-key-change-in-production',
         signOptions: { expiresIn: '24h' },
       }),
       inject: [ConfigService],
