@@ -12,6 +12,7 @@ import { Server, Socket } from 'socket.io';
 import { Logger, Inject, forwardRef } from '@nestjs/common';
 import { NavigationService } from '../services/navigation.service';
 import { FireDetectionGateway } from './fire-detection.gateway';
+import { PresenceBrokerService } from '../services/presence-broker.service';
 
 export interface PositionUpdatePayload {
   user_id: number;
@@ -77,6 +78,7 @@ export class NavigationGateway
     private readonly navigationService: NavigationService,
     @Inject(forwardRef(() => FireDetectionGateway))
     private readonly fireDetectionGateway: FireDetectionGateway,
+    private readonly presenceBroker: PresenceBrokerService,
   ) {}
 
   afterInit(server: Server) {
@@ -196,6 +198,26 @@ export class NavigationGateway
         current_instruction: session?.instructions?.[session.currentInstructionIndex]?.text,
         progress: session?.progressPercent,
         last_update: Date.now(),
+      });
+
+      // Upsert to presence broker for real-time occupant tracking
+      // Default role to 'evacuee' for WebSocket position updates
+      // This can be enhanced to use actual user role from auth token
+      this.presenceBroker.upsert({
+        userId: payload.user_id,
+        buildingId: payload.building_id,
+        floorId: payload.floor_id,
+        nodeId: payload.node_id,
+        x: payload.x,
+        y: payload.y,
+        heading: payload.heading,
+        speed: payload.speed,
+        confidence: payload.confidence,
+        role: 'evacuee', // Default for WebSocket position updates
+        status: session ? 'navigating' : 'active',
+        currentInstruction: session?.instructions?.[session.currentInstructionIndex]?.text,
+        progressPercent: session?.progressPercent,
+        lastUpdate: Date.now(),
       });
     } catch (error) {
       this.logger.error(`Position update error: ${error.message}`);

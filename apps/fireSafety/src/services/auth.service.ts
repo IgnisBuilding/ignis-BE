@@ -3,7 +3,7 @@ import { JwtService } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import * as bcrypt from 'bcryptjs';
-import { User } from '@app/entities';
+import { User, UserPosition } from '@app/entities';
 import { LoginDto, RegisterDto, UpdateProfileDto, ChangePasswordDto } from '../dto/auth.dto';
 import { Role } from '../enums/role.enum';
 
@@ -12,6 +12,8 @@ export class AuthService {
   constructor(
     @InjectRepository(User)
     private userRepository: Repository<User>,
+    @InjectRepository(UserPosition)
+    private positionRepository: Repository<UserPosition>,
     private jwtService: JwtService,
   ) {}
 
@@ -74,6 +76,13 @@ export class AuthService {
     const payload = { email: user.email, sub: user.id, role: user.role };
     const token = this.jwtService.sign(payload);
 
+    // Mark the user as online as soon as they successfully authenticate.
+    // Navigation updates will refine this to 'navigating' when applicable.
+    await this.positionRepository.update(
+      { userId: user.id },
+      { status: 'active' },
+    );
+
     return {
       access_token: token,
       user: {
@@ -86,6 +95,15 @@ export class AuthService {
         initials: this.generateInitials(user.name),
       },
     };
+  }
+
+  async logout(userId: number) {
+    await this.positionRepository.update(
+      { userId },
+      { status: 'offline' },
+    );
+
+    return { message: 'Logged out successfully' };
   }
 
   createAnonymousToken(deviceId: string) {

@@ -58,6 +58,7 @@ import { FingerprintController } from './controllers/fingerprint.controller';
 import { SettingsController } from './controllers/settings.controller';
 import { NotificationController } from './controllers/notification.controller';
 import { EmployeeController } from './controllers/employee.controller';
+import { OccupantsController } from './controllers/occupants.controller';
 import { FingerprintService } from './services/fingerprint.service';
 import { SettingsService } from './services/settings.service';
 import { NotificationService } from './services/notification.service';
@@ -77,6 +78,7 @@ import { FireDetectionGateway } from './gateways/fire-detection.gateway';
 import { NavigationGateway } from './gateways/navigation.gateway';
 import { NavigationService } from './services/navigation.service';
 import { SensorLogAggregationService } from './services/sensor-log-aggregation.service';
+import { PresenceBrokerService } from './services/presence-broker.service';
 
 @Module({
   imports: [
@@ -146,6 +148,7 @@ import { SensorLogAggregationService } from './services/sensor-log-aggregation.s
     SettingsController,
     NotificationController,
     EmployeeController,
+    OccupantsController,
   ],
   providers: [
     FireSafetyService,
@@ -168,6 +171,7 @@ import { SensorLogAggregationService } from './services/sensor-log-aggregation.s
     EmployeeService,
     ArduinoSensorService,
     SensorLogAggregationService,
+    PresenceBrokerService,
   ],
 })
 export class FireSafetyModule {}

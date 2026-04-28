@@ -13,6 +13,7 @@ import {
 } from '@nestjs/common';
 import { NavigationService } from '../services/navigation.service';
 import { NavigationGateway } from '../gateways/navigation.gateway';
+import { PresenceBrokerService } from '../services/presence-broker.service';
 import { JwtAuthGuard } from '../guards/jwt-auth.guard';
 import { Public } from '../decorators/public.decorator';
 import {
@@ -33,6 +34,7 @@ export class NavigationController {
     private readonly navigationService: NavigationService,
     @Inject(forwardRef(() => NavigationGateway))
     private readonly navigationGateway: NavigationGateway,
+    private readonly presenceBroker: PresenceBrokerService,
   ) {}
 
   // ═══════════════════════════════════════════════════════════════
@@ -78,6 +80,26 @@ export class NavigationController {
           progress: session?.progressPercent,
           last_update: Date.now(),
         });
+
+      // Upsert to presence broker for real-time occupant tracking
+      // Role defaults to 'evacuee' for REST position updates (mobile app)
+      // WebSocket handler can provide more accurate role info if available
+      this.presenceBroker.upsert({
+        userId: dto.user_id,
+        buildingId: dto.building_id,
+        floorId: dto.floor_id,
+        nodeId: dto.node_id,
+        x: dto.x,
+        y: dto.y,
+        heading: dto.heading,
+        speed: dto.speed,
+        confidence: dto.confidence,
+        role: 'evacuee', // Default for mobile/REST updates
+        status: session ? 'navigating' : 'active',
+        currentInstruction: session?.instructions?.[session.currentInstructionIndex]?.text,
+        progressPercent: session?.progressPercent,
+        lastUpdate: Date.now(),
+      });
 
       if (session) {
         // Update navigation progress
@@ -169,6 +191,22 @@ export class NavigationController {
           speed: dto.speed,
           confidence: dto.confidence,
           position_source: dto.position_source,
+        });
+
+        // Upsert to presence broker
+        this.presenceBroker.upsert({
+          userId: dto.user_id,
+          buildingId: dto.building_id,
+          floorId: dto.floor_id,
+          nodeId: dto.node_id,
+          x: dto.x,
+          y: dto.y,
+          heading: dto.heading,
+          speed: dto.speed,
+          confidence: dto.confidence,
+          role: 'evacuee',
+          status: 'active',
+          lastUpdate: Date.now(),
         });
 
         synced++;

@@ -81,6 +81,8 @@ export class NavigationService {
     position_source?: string;
   }): Promise<UserPosition> {
     const isAnonymous = !data.user_id || data.user_id <= 0;
+    const activeSession = isAnonymous ? null : await this.getActiveSession(data.user_id);
+    const positionStatus = activeSession ? 'navigating' : 'active';
 
     // Find existing position by user_id only.
     let position = await this.positionRepo.findOne({
@@ -102,6 +104,7 @@ export class NavigationService {
       position.confidence = data.confidence || 0.5;
       position.sensorData = data.sensor_data;
       position.positionSource = data.position_source || position.positionSource || 'wifi';
+      position.status = positionStatus;
       position.timestamp = new Date();
     } else {
       // Create new
@@ -118,7 +121,7 @@ export class NavigationService {
         confidence: data.confidence || 0.5,
         sensorData: data.sensor_data,
         positionSource: data.position_source || 'wifi',
-        status: 'active',
+        status: positionStatus,
       };
 
       position = this.positionRepo.create(positionData);
