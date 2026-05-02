@@ -1,8 +1,7 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete, Query, UseGuards, ParseIntPipe } from '@nestjs/common';
+import { Controller, Get, Post, Body, Patch, Param, Delete, Query, UseGuards, ParseIntPipe, Headers, UnauthorizedException } from '@nestjs/common';
 import { SensorService } from '../services/sensor.service';
-import { ArduinoSensorService } from '../services/arduino-sensor.service';
 import { SensorLogAggregationService } from '../services/sensor-log-aggregation.service';
-import { CreateSensorDto, UpdateSensorDto } from '../dto/sensor.dto';
+import { CreateSensorDto, UpdateSensorDto, SensorReadingDto } from '../dto/sensor.dto';
 import { JwtAuthGuard } from '../guards/jwt-auth.guard';
 import { Public } from '../decorators/public.decorator';
 
@@ -11,7 +10,6 @@ import { Public } from '../decorators/public.decorator';
 export class SensorController {
   constructor(
     private sensorService: SensorService,
-    private arduinoSensorService: ArduinoSensorService,
     private aggregationService: SensorLogAggregationService,
   ) {}
 
@@ -29,10 +27,17 @@ export class SensorController {
     return this.sensorService.getStats();
   }
 
-  @Get('arduino/health')
+  @Post('reading')
   @Public()
-  getArduinoHealth() {
-    return this.arduinoSensorService.getHealth();
+  async handleReading(
+    @Body() dto: SensorReadingDto,
+    @Headers('x-api-key') apiKey?: string,
+  ) {
+    const configuredKey = process.env.FIRE_DETECT_API_KEY;
+    if (configuredKey && apiKey !== configuredKey) {
+      throw new UnauthorizedException('Invalid API key');
+    }
+    return this.sensorService.handleReading(dto);
   }
 
   @Get(':id')

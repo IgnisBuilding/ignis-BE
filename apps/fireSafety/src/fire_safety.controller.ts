@@ -18,6 +18,7 @@ import { PlaceFiresDto } from './dto/PlaceFires.dto';
 import { FindSafestPointDto } from './dto/FindSafestPoint.dto';
 import { FireDetectionGateway } from './gateways/fire-detection.gateway';
 import { NotificationService } from './services/notification.service';
+import { FireDetectionService } from './services/fire-detection.service';
 
 @Controller('fireSafety')
 export class FireSafetyController {
@@ -27,6 +28,7 @@ export class FireSafetyController {
     private readonly dataSource: DataSource,
     private readonly fireDetectionGateway: FireDetectionGateway,
     private readonly notificationService: NotificationService,
+    private readonly fireDetectionService: FireDetectionService,
   ) {}
 
   @Get('emergency/exits')
@@ -685,19 +687,55 @@ export class FireSafetyController {
 
   /**
    * POST /fireSafety/clear-fires
-   * Clears fire hazards. Use clearAll=true to clear ALL active hazards.
+   * Resolves fire hazards (sets status='resolved'). Use clearAll=true to resolve ALL active hazards.
+   * Uses UPDATE instead of DELETE so recently-cleared hazards remain visible to the
+   * fire-detection cooldown guard, preventing immediate re-creation while sensors
+   * are still above threshold.
    */
   @Post('clear-fires')
-  async clearFires(@Body() body?: { clearAll?: boolean }) {
+  async clearFires(@Body() body?: { clearAll?: boolean; buildingId?: number }) {
     try {
-      // If clearAll is true, delete ALL active hazards regardless of type
-      // Otherwise, delete all fire-related types (fire, manual_fire, smoke)
-      const deleteQuery = body?.clearAll
-        ? `DELETE FROM hazards WHERE status = 'active' RETURNING id`
-        : `DELETE FROM hazards WHERE type IN ('fire', 'manual_fire', 'smoke') AND status = 'active' RETURNING id`;
+      const updateQuery = body?.clearAll
+        ? `UPDATE hazards SET status = 'resolved', resolved_at = NOW(), updated_at = NOW() WHERE status IN ('active', 'pending', 'responded') RETURNING id`
+        : `UPDATE hazards SET status = 'resolved', resolved_at = NOW(), updated_at = NOW() WHERE type IN ('fire', 'manual_fire', 'smoke') AND status IN ('active', 'pending', 'responded') RETURNING id`;
 
-      const result = await this.dataSource.query(deleteQuery);
+      const result = await this.dataSource.query(updateQuery);
       const deletedCount = result ? result.length : 0;
+
+      // Emit fire.resolved for each cleared hazard so connected clients (web, mobile) remove
+      // the active alert banner and suppress the alarm sound for the next few minutes.
+      if (result && result.length > 0) {
+        for (const row of result) {
+          this.fireDetectionGateway.emitFireResolved({
+            hazard_id: row.id,
+            building_id: body?.buildingId || 0,
+          });
+        }
+      }
+
+      // Reset camera detection logs so checkAndLogic cannot immediately re-fire after the
+      // Guard 2 cooldown expires.  Without this, any fire_detection_log row that still has
+      // alert_triggered=true lets a single sensor tick re-create the hazard the moment the
+      // 60s cooldown window elapses — even when the camera is no longer pointed at fire.
+      if (body?.buildingId) {
+        await this.dataSource.query(
+          `UPDATE fire_detection_log SET alert_triggered = false
+           WHERE camera_id IN (SELECT id FROM camera WHERE building_id = $1)
+             AND alert_triggered = true
+             AND created_at > NOW() - INTERVAL '10 minutes'`,
+          [body.buildingId],
+        );
+      } else {
+        await this.dataSource.query(
+          `UPDATE fire_detection_log SET alert_triggered = false
+           WHERE alert_triggered = true
+             AND created_at > NOW() - INTERVAL '10 minutes'`,
+        );
+      }
+
+      // Clear the in-memory consecutiveDetections cache so the camera pipeline must rebuild
+      // 3 consecutive CLIP "dangerous" detections before it can re-arm.
+      await this.fireDetectionService.resetDetectionCache();
 
       return {
         success: true,
