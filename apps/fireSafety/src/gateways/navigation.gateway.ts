@@ -187,12 +187,13 @@ export class NavigationGateway
         }
       }
 
-      // Broadcast position to building monitoring dashboard
+      // Broadcast position to building monitoring dashboard (include authoritative nearest node id)
       this.server.to(`building:${payload.building_id}:tracking`).emit('evacuee.position', {
         user_id: payload.user_id,
         building_id: payload.building_id,
         floor_id: payload.floor_id,
         coordinates: [payload.x, payload.y],
+        nearest_node_id: position?.nearestNodeId ?? null,
         heading: payload.heading,
         status: session ? 'navigating' : 'active',
         current_instruction: session?.instructions?.[session.currentInstructionIndex]?.text,
@@ -207,7 +208,7 @@ export class NavigationGateway
         userId: payload.user_id,
         buildingId: payload.building_id,
         floorId: payload.floor_id,
-        nodeId: payload.node_id,
+        nodeId: position?.nearestNodeId ?? payload.node_id ?? null,
         x: payload.x,
         y: payload.y,
         heading: payload.heading,

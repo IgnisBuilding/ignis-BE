@@ -10,13 +10,13 @@ import {
 } from '@nestjs/common';
 import { Request } from 'express';
 import { JwtAuthGuard } from '../guards/jwt-auth.guard';
-import { Public } from '../decorators/public.decorator';
 import { PresenceBrokerService, OccupantPresence } from '../services/presence-broker.service';
 
 // Extend Express Request to include user payload from JWT
 interface AuthRequest extends Request {
   user?: {
     id: number;
+    userId: number;
     sub: number;
     role?: 'firefighter' | 'admin' | 'building_authority' | 'evacuee';
     email?: string;
@@ -49,7 +49,6 @@ export class OccupantsController {
    * Returns: Array of OccupantPresence visible to user based on their role
    */
   @Get('positions')
-  @Public()
   async getOccupants(
     @Query('building_id') buildingId: string,
     @Query('floor_id') floorId?: string,
@@ -73,7 +72,7 @@ export class OccupantsController {
 
       // Get user info from JWT token in request
       // User must be authenticated to see occupant data
-      const userId = req?.user?.id || -1;
+      const userId = req?.user?.userId ?? req?.user?.id ?? req?.user?.sub ?? -1;
       const userRole = (req?.user?.role || 'evacuee') as
         | 'firefighter'
         | 'admin'
@@ -202,7 +201,7 @@ export class OccupantsController {
       // Get all visible occupants and filter
       const visible = this.presenceBroker.getVisibleOccupants(
         buildingIdNum,
-        req?.user?.id || -1,
+        req?.user?.userId ?? req?.user?.id ?? req?.user?.sub ?? -1,
         userRole,
       );
 

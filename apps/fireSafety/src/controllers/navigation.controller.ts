@@ -72,8 +72,8 @@ export class NavigationController {
         .emit('evacuee.position', {
           user_id: dto.user_id,
           building_id: dto.building_id,
-          floor_id: dto.floor_id,
           coordinates: [dto.x, dto.y],
+          nearest_node_id: position?.nearestNodeId ?? null,
           heading: dto.heading,
           status: session ? 'navigating' : 'active',
           current_instruction: session?.instructions?.[session.currentInstructionIndex]?.text,
@@ -88,7 +88,7 @@ export class NavigationController {
         userId: dto.user_id,
         buildingId: dto.building_id,
         floorId: dto.floor_id,
-        nodeId: dto.node_id,
+        nodeId: position?.nearestNodeId ?? dto.node_id ?? null,
         x: dto.x,
         y: dto.y,
         heading: dto.heading,
@@ -144,7 +144,7 @@ export class NavigationController {
       throw new HttpException(
         {
           success: false,
-          error: error.message,
+          error: error instanceof Error ? error.message : String(error),
         },
         HttpStatus.BAD_REQUEST,
       );
@@ -165,21 +165,8 @@ export class NavigationController {
     // but broadcast all for real-time tracking
     for (const dto of positions) {
       try {
-        // Always broadcast via WebSocket for firefighter visibility
-        this.navigationGateway.server
-          ?.to(`building:${dto.building_id}:tracking`)
-          .emit('evacuee.position', {
-            user_id: dto.user_id,
-            building_id: dto.building_id,
-            floor_id: dto.floor_id,
-            coordinates: [dto.x, dto.y],
-            heading: dto.heading,
-            status: 'active',
-            last_update: Date.now(),
-          });
-
         // Persist in DB using user_id-based tracking
-        await this.navigationService.updatePosition({
+        const position = await this.navigationService.updatePosition({
           user_id: dto.user_id,
           building_id: dto.building_id,
           floor_id: dto.floor_id,
@@ -193,12 +180,26 @@ export class NavigationController {
           position_source: dto.position_source,
         });
 
+        // Always broadcast via WebSocket for firefighter visibility
+        this.navigationGateway.server
+          ?.to(`building:${dto.building_id}:tracking`)
+          .emit('evacuee.position', {
+            user_id: dto.user_id,
+            building_id: dto.building_id,
+            floor_id: dto.floor_id,
+            coordinates: [dto.x, dto.y],
+            nearest_node_id: position?.nearestNodeId ?? null,
+            heading: dto.heading,
+            status: 'active',
+            last_update: Date.now(),
+          });
+
         // Upsert to presence broker
         this.presenceBroker.upsert({
           userId: dto.user_id,
           buildingId: dto.building_id,
           floorId: dto.floor_id,
-          nodeId: dto.node_id,
+          nodeId: position?.nearestNodeId ?? dto.node_id ?? null,
           x: dto.x,
           y: dto.y,
           heading: dto.heading,
@@ -273,7 +274,7 @@ export class NavigationController {
       throw new HttpException(
         {
           success: false,
-          error: error.message,
+          error: error instanceof Error ? error.message : String(error),
         },
         HttpStatus.BAD_REQUEST,
       );
@@ -298,7 +299,7 @@ export class NavigationController {
       throw new HttpException(
         {
           success: false,
-          error: error.message,
+          error: error instanceof Error ? error.message : String(error),
         },
         HttpStatus.BAD_REQUEST,
       );
@@ -338,7 +339,7 @@ export class NavigationController {
       throw new HttpException(
         {
           success: false,
-          error: error.message,
+          error: error instanceof Error ? error.message : String(error),
         },
         HttpStatus.INTERNAL_SERVER_ERROR,
       );
@@ -408,7 +409,7 @@ export class NavigationController {
       throw new HttpException(
         {
           success: false,
-          error: error.message,
+          error: error instanceof Error ? error.message : String(error),
         },
         HttpStatus.INTERNAL_SERVER_ERROR,
       );
@@ -472,7 +473,7 @@ export class NavigationController {
       throw new HttpException(
         {
           success: false,
-          error: error.message,
+          error: error instanceof Error ? error.message : String(error),
         },
         HttpStatus.BAD_REQUEST,
       );
