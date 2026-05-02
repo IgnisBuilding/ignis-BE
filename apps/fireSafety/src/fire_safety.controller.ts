@@ -685,18 +685,19 @@ export class FireSafetyController {
 
   /**
    * POST /fireSafety/clear-fires
-   * Clears fire hazards. Use clearAll=true to clear ALL active hazards.
+   * Resolves fire hazards (sets status='resolved'). Use clearAll=true to resolve ALL active hazards.
+   * Uses UPDATE instead of DELETE so recently-cleared hazards remain visible to the
+   * fire-detection cooldown guard, preventing immediate re-creation while sensors
+   * are still above threshold.
    */
   @Post('clear-fires')
   async clearFires(@Body() body?: { clearAll?: boolean }) {
     try {
-      // If clearAll is true, delete ALL active hazards regardless of type
-      // Otherwise, delete all fire-related types (fire, manual_fire, smoke)
-      const deleteQuery = body?.clearAll
-        ? `DELETE FROM hazards WHERE status = 'active' RETURNING id`
-        : `DELETE FROM hazards WHERE type IN ('fire', 'manual_fire', 'smoke') AND status = 'active' RETURNING id`;
+      const updateQuery = body?.clearAll
+        ? `UPDATE hazards SET status = 'resolved', resolved_at = NOW(), updated_at = NOW() WHERE status IN ('active', 'pending', 'responded') RETURNING id`
+        : `UPDATE hazards SET status = 'resolved', resolved_at = NOW(), updated_at = NOW() WHERE type IN ('fire', 'manual_fire', 'smoke') AND status IN ('active', 'pending', 'responded') RETURNING id`;
 
-      const result = await this.dataSource.query(deleteQuery);
+      const result = await this.dataSource.query(updateQuery);
       const deletedCount = result ? result.length : 0;
 
       return {

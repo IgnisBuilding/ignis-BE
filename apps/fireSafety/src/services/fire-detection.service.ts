@@ -1,14 +1,17 @@
 import { Injectable, NotFoundException, Logger, Inject, forwardRef, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, MoreThan } from 'typeorm';
-import { camera, fire_detection_log, fire_alert_config, hazards, nodes } from '@app/entities';
+import { Repository, MoreThan, In } from 'typeorm';
+import * as http from 'http';
+import * as https from 'https';
+import { camera, fire_detection_log, fire_alert_config, hazards, nodes, SensorLog, Sensor } from '@app/entities';
 import {
   FireDetectionAlertDto,
   FireDetectionAlertResponseDto,
+  FireConfirmedDto,
   CreateFireAlertConfigDto,
   UpdateFireAlertConfigDto,
 } from '../dto/fire-detection.dto';
-import { FireDetectionGateway } from '../gateways/fire-detection.gateway';
+import { FireDetectionGateway, FireDetectionEvent } from '../gateways/fire-detection.gateway';
 
 @Injectable()
 export class FireDetectionService implements OnModuleInit, OnModuleDestroy {
@@ -22,9 +25,8 @@ export class FireDetectionService implements OnModuleInit, OnModuleDestroy {
   private readonly CACHE_CLEANUP_INTERVAL_MS = 60000; // 1 minute
   private readonly CACHE_ENTRY_TTL_SECONDS = 300; // 5 minutes
   private readonly sensorCameraConfirmWindowSeconds = Number(
-    process.env.SENSOR_CAMERA_CONFIRM_WINDOW_SECONDS || 120,
+    process.env.SENSOR_CAMERA_CONFIRM_WINDOW_SECONDS || 60,
   );
-  private recentSensorAlerts: Map<string, number> = new Map();
 
   constructor(
     @InjectRepository(camera)
@@ -37,6 +39,10 @@ export class FireDetectionService implements OnModuleInit, OnModuleDestroy {
     private hazardRepository: Repository<hazards>,
     @InjectRepository(nodes)
     private nodesRepository: Repository<nodes>,
+    @InjectRepository(SensorLog)
+    private sensorLogRepository: Repository<SensorLog>,
+    @InjectRepository(Sensor)
+    private sensorRepository: Repository<Sensor>,
     @Inject(forwardRef(() => FireDetectionGateway))
     private readonly fireDetectionGateway: FireDetectionGateway,
   ) {}
@@ -86,13 +92,6 @@ export class FireDetectionService implements OnModuleInit, OnModuleDestroy {
     for (const [key, value] of this.consecutiveDetections) {
       if (now - value.lastTimestamp > this.CACHE_ENTRY_TTL_SECONDS) {
         this.consecutiveDetections.delete(key);
-        cleanedCount++;
-      }
-    }
-
-    for (const [key, timestamp] of this.recentSensorAlerts) {
-      if (now - timestamp > this.CACHE_ENTRY_TTL_SECONDS) {
-        this.recentSensorAlerts.delete(key);
         cleanedCount++;
       }
     }
@@ -155,16 +154,20 @@ export class FireDetectionService implements OnModuleInit, OnModuleDestroy {
     const alertResult = await this.checkAlertCriteria(cam, config, maxConfidence, alertDto.timestamp);
 
     if (alertResult.shouldTrigger) {
-      const hasSensorConfirmation = this.hasRecentSensorConfirmation(cam, alertDto.timestamp);
-      if (!hasSensorConfirmation) {
-        this.logger.warn(
-          `Camera fire detection for ${cam.camera_id} ignored for hazard creation: no recent sensor confirmation in location window`,
-        );
+      // 6. Mark camera criteria met so the sensor path can find it
+      detectionLog.alert_triggered = true;
+      await this.fireDetectionLogRepository.save(detectionLog);
+
+      // 7. Check DB-based AND logic: hazard only if sensor also recently alerted
+      const hazardId = await this.checkAndLogic(cam.room_id, cam.building_id);
+
+      if (hazardId) {
+        this.logger.log(`Fire alert triggered for camera ${cam.camera_id} in building ${cam.building_id}`);
         return {
           received: true,
           logged: true,
-          alert_triggered: false,
-          reason: 'No recent sensor confirmation for this location',
+          alert_triggered: true,
+          hazard_id: hazardId,
           camera: {
             id: cam.id,
             name: cam.name,
@@ -174,43 +177,15 @@ export class FireDetectionService implements OnModuleInit, OnModuleDestroy {
           },
         };
       }
-    }
 
-    if (alertResult.shouldTrigger) {
-      // 6. Create hazard if configured
-      let hazardId: number | undefined;
-      if (config.auto_create_hazard) {
-        const hazard = await this.createFireHazard(cam, maxConfidence);
-        hazardId = hazard.id;
-
-        // Update detection log with hazard reference
-        detectionLog.alert_triggered = true;
-        detectionLog.hazard_id = hazardId;
-        await this.fireDetectionLogRepository.save(detectionLog);
-      }
-
-      this.logger.log(`Fire alert triggered for camera ${cam.camera_id} in building ${cam.building_id}`);
-
-      // Emit WebSocket event to connected clients
-      const severity = maxConfidence >= 0.9 ? 'critical' : maxConfidence >= 0.8 ? 'high' : 'medium';
-      this.fireDetectionGateway.emitFireDetected({
-        camera_id: cam.camera_id,
-        camera_name: cam.name,
-        building_id: cam.building_id,
-        floor_id: cam.floor_id ?? undefined,
-        room_id: cam.room_id ?? undefined,
-        confidence: maxConfidence,
-        timestamp: alertDto.timestamp,
-        hazard_id: hazardId,
-        severity,
-        location_description: cam.location_description ?? undefined,
-      });
-
+      this.logger.warn(
+        `Camera fire detection for ${cam.camera_id} logged; awaiting sensor confirmation in same location`,
+      );
       return {
         received: true,
         logged: true,
-        alert_triggered: true,
-        hazard_id: hazardId,
+        alert_triggered: false,
+        reason: 'Camera criteria met, awaiting sensor confirmation',
         camera: {
           id: cam.id,
           name: cam.name,
@@ -281,21 +256,18 @@ export class FireDetectionService implements OnModuleInit, OnModuleDestroy {
       };
     }
 
-    // Check cooldown - if there was a recent alert, don't trigger again
-    const cooldownTime = new Date(Date.now() - config.cooldown_seconds * 1000);
-    const recentAlert = await this.fireDetectionLogRepository.findOne({
-      where: {
-        camera_id: cam.id,
-        alert_triggered: true,
-        created_at: MoreThan(cooldownTime),
-      },
-      order: { created_at: 'DESC' },
-    });
+    // Check cooldown — fire_detection_log.created_at is stored as UTC (DB DEFAULT now()).
+    // TypeORM/pg serializes JS Date params in local time, causing a 5h offset on PKT machines.
+    // Use raw SQL with NOW() so both sides of the comparison are server-side UTC.
+    const cooldownRows: { id: number; created_at: Date }[] = await this.fireDetectionLogRepository.query(
+      `SELECT id, created_at FROM fire_detection_log WHERE camera_id = $1 AND alert_triggered = true AND created_at > NOW() - ($2 * INTERVAL '1 second') ORDER BY created_at DESC LIMIT 1`,
+      [cam.id, config.cooldown_seconds],
+    );
 
-    if (recentAlert) {
+    if (cooldownRows.length > 0) {
       return {
         shouldTrigger: false,
-        reason: `Cooldown active - last alert was ${Math.round((Date.now() - recentAlert.created_at.getTime()) / 1000)}s ago`,
+        reason: `Cooldown active`,
       };
     }
 
@@ -331,37 +303,115 @@ export class FireDetectionService implements OnModuleInit, OnModuleDestroy {
     return { shouldTrigger: true };
   }
 
-  recordSensorAlert(sensor: { roomId?: number | null; floorId?: number | null; buildingId?: number | null }, _value: number, timestampSec: number) {
-    if (sensor.roomId) {
-      this.recentSensorAlerts.set(`room:${sensor.roomId}`, timestampSec);
-    }
-    if (sensor.floorId) {
-      this.recentSensorAlerts.set(`floor:${sensor.floorId}`, timestampSec);
-    }
-    if (sensor.buildingId) {
-      this.recentSensorAlerts.set(`building:${sensor.buildingId}`, timestampSec);
-    }
-  }
+  /**
+   * DB-based AND logic: returns hazard ID if both a camera detection AND sensor alert
+   * have fired in the same location within the confirmation window. Creates the hazard
+   * if not already present; emits the fire-detected WebSocket event.
+   * Called from both the camera path (processAlert) and the sensor path (handleReading).
+   */
+  async checkAndLogic(roomId?: number | null, buildingId?: number | null): Promise<number | null> {
+    if (!roomId && !buildingId) return null;
 
-  private hasRecentSensorConfirmation(cam: camera, cameraTimestampSec: number): boolean {
-    const keys: string[] = [];
-    if (cam.room_id) keys.push(`room:${cam.room_id}`);
-    if (cam.floor_id) keys.push(`floor:${cam.floor_id}`);
-    if (cam.building_id) keys.push(`building:${cam.building_id}`);
+    const since = new Date(Date.now() - this.sensorCameraConfirmWindowSeconds * 1000);
 
-    if (keys.length === 0) {
-      return false;
-    }
+    // Step 1: Find cameras in this building/room, then look up recent alert_triggered log
+    const cameras = await this.cameraRepository.find({
+      where: buildingId ? { building_id: buildingId } : { room_id: roomId! },
+      select: ['id'],
+    });
+    if (cameras.length === 0) return null;
 
-    for (const key of keys) {
-      const ts = this.recentSensorAlerts.get(key);
-      if (!ts) continue;
-      if (Math.abs(cameraTimestampSec - ts) <= this.sensorCameraConfirmWindowSeconds) {
-        return true;
+    const cameraIds = cameras.map((c) => c.id);
+    const cameraLog = await this.fireDetectionLogRepository.findOne({
+      where: {
+        camera_id: In(cameraIds),
+        alert_triggered: true,
+        detection_timestamp: MoreThan(since),
+      },
+      order: { detection_timestamp: 'DESC' },
+    });
+
+    if (!cameraLog) return null;
+
+    // Step 2: Find sensors in this building/room, then look up recent isAlert log.
+    // Use raw SQL with NOW() so the comparison is fully server-side:
+    // sensor_log.created_at is set by PostgreSQL DEFAULT now() (server UTC),
+    // but TypeORM/pg serializes JS Date params in local time — timezone mismatch
+    // causes MoreThan(since) to always fail on non-UTC machines.
+    const sensors = await this.sensorRepository.find({
+      where: buildingId ? { buildingId } : { roomId: roomId! },
+      select: ['id'],
+    });
+    if (sensors.length === 0) return null;
+
+    const sensorIds = sensors.map((s) => s.id);
+    const sensorRows: { id: number }[] = await this.sensorLogRepository.query(
+      `SELECT id FROM sensor_log WHERE sensor_id = ANY($1) AND is_alert = true AND created_at > NOW() - ($2 * INTERVAL '1 second') ORDER BY created_at DESC LIMIT 1`,
+      [sensorIds, this.sensorCameraConfirmWindowSeconds],
+    );
+
+    if (sensorRows.length === 0) return null;
+
+    // Both confirmed — fetch camera for hazard creation and duplicate guard
+    const cam = await this.cameraRepository.findOne({ where: { id: cameraLog.camera_id } });
+    if (!cam) return null;
+
+    if (cam.room_id) {
+      // Guard 1: hazard being actively dealt with — return it without re-emitting
+      const existing = await this.hazardRepository.findOne({
+        where: { roomId: cam.room_id, type: 'fire', status: In(['active', 'pending', 'responded']) },
+      });
+      if (existing) return existing.id;
+
+      // Guard 2: cooldown — a hazard was already created for this room recently.
+      // Prevents spam-creating hazards when the user clears one but conditions still hold.
+      // Use raw SQL + NOW() to avoid timezone mismatch (hazards.created_at is DEFAULT now()).
+      // Clamp to at least sensorCameraConfirmWindowSeconds so a DB config of 0 can't disable it.
+      const config = await this.getOrCreateConfig(cam.building_id);
+      const cooldownSecs = Math.max(
+        Number(config.cooldown_seconds ?? 60),
+        this.sensorCameraConfirmWindowSeconds,
+      );
+      const recentHazards: { id: number }[] = await this.hazardRepository.query(
+        `SELECT id FROM hazards WHERE room_id = $1 AND type = 'fire' AND created_at > NOW() - ($2 * INTERVAL '1 second') LIMIT 1`,
+        [cam.room_id, cooldownSecs],
+      );
+      if (recentHazards.length > 0) {
+        this.logger.warn(`[AND] Room ${cam.room_id} in fire-detection cooldown (${cooldownSecs}s), skipping new hazard`);
+        return null;
       }
     }
 
-    return false;
+    const hazard = await this.createFireHazard(cam, cameraLog.confidence);
+
+    cameraLog.hazard_id = hazard.id;
+    await this.fireDetectionLogRepository.save(cameraLog);
+
+    const severity = cameraLog.confidence >= 0.9 ? 'critical' : cameraLog.confidence >= 0.8 ? 'high' : 'medium';
+    const fireEvent: FireDetectionEvent = {
+      camera_id: cam.camera_id,
+      camera_name: cam.name,
+      building_id: cam.building_id,
+      floor_id: cam.floor_id ?? undefined,
+      room_id: cam.room_id ?? undefined,
+      confidence: cameraLog.confidence,
+      timestamp: Math.floor(Date.now() / 1000),
+      hazard_id: hazard.id,
+      severity,
+      location_description: cam.location_description ?? undefined,
+    };
+
+    this.fireDetectionGateway.emitFireDetected(fireEvent);
+
+    // Forward to deployed BE so its WS clients (e.g. mobile WebView) receive fire.detected.
+    // Only runs when DEPLOYED_BACKEND_URL is set (local instance). Deployed BE never has this
+    // var set, so there is no forwarding loop.
+    void this.forwardFireConfirmedToDeployed(fireEvent).catch((err: unknown) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.logger.warn(`Failed to forward fire-confirmed to deployed backend: ${msg}`);
+    });
+
+    return hazard.id;
   }
 
   /**
@@ -484,6 +534,79 @@ export class FireDetectionService implements OnModuleInit, OnModuleDestroy {
       .andWhere('log.detection_timestamp > :since', { since })
       .orderBy('log.detection_timestamp', 'DESC')
       .getMany();
+  }
+
+  /**
+   * Receive a fire-confirmed event forwarded from a local ignis-BE instance.
+   * Just emits fire.detected on this instance's WS — no DB writes, no further forwarding.
+   */
+  receiveFireConfirmed(dto: FireConfirmedDto): void {
+    this.fireDetectionGateway.emitFireDetected({
+      camera_id: dto.camera_id,
+      camera_name: dto.camera_name ?? dto.camera_id,
+      building_id: dto.building_id,
+      floor_id: dto.floor_id,
+      room_id: dto.room_id,
+      confidence: dto.confidence,
+      timestamp: dto.timestamp,
+      hazard_id: dto.hazard_id,
+      severity: dto.severity,
+      location_description: dto.location_description,
+    });
+  }
+
+  /**
+   * POST the fire-confirmed event to the deployed backend so its WS clients receive it.
+   */
+  private async forwardFireConfirmedToDeployed(event: FireDetectionEvent): Promise<void> {
+    const deployedUrl = process.env.DEPLOYED_BACKEND_URL;
+    if (!deployedUrl) return;
+
+    const apiKey = process.env.FIRE_DETECT_API_KEY;
+    await this.postJsonForward(`${deployedUrl}/fire-detection/fire-confirmed`, event, apiKey);
+    this.logger.log(
+      `Forwarded fire-confirmed to deployed backend (building=${event.building_id}, room=${event.room_id ?? 'n/a'})`,
+    );
+  }
+
+  private async postJsonForward(urlStr: string, data: any, apiKey?: string): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      try {
+        const u = new URL(urlStr);
+        const payload = JSON.stringify(data);
+        const lib = u.protocol === 'https:' ? https : http;
+        const options: any = {
+          hostname: u.hostname,
+          port: u.port ? Number(u.port) : u.protocol === 'https:' ? 443 : 80,
+          path: u.pathname + (u.search || ''),
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Content-Length': Buffer.byteLength(payload),
+          },
+        };
+        if (apiKey) options.headers['x-api-key'] = apiKey;
+
+        const req = lib.request(options, (res: any) => {
+          const chunks: any[] = [];
+          res.on('data', (chunk: any) => chunks.push(chunk));
+          res.on('end', () => {
+            if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {
+              resolve();
+            } else {
+              const body = Buffer.concat(chunks).toString('utf8');
+              reject(new Error(`fire-confirmed forward failed: ${res.statusCode} ${body}`));
+            }
+          });
+        });
+
+        req.on('error', (e: Error) => reject(e));
+        req.write(payload);
+        req.end();
+      } catch (e) {
+        reject(e);
+      }
+    });
   }
 
   /**

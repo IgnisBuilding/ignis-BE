@@ -570,7 +570,7 @@ export class ArduinoSensorService implements OnModuleInit, OnModuleDestroy {
       // MQ-7 is treated as fire-risk and can drive fire detection orchestration.
       if (key === 'MQ7') {
         const eventTimestampSec = Math.floor(Date.now() / 1000);
-        this.fireDetectionService.recordSensorAlert(updatedSensor, value, eventTimestampSec);
+        void this.fireDetectionService.checkAndLogic(updatedSensor.roomId, updatedSensor.buildingId);
 
         // Notify fire-detect pipeline orchestrator (if configured) to start camera capture.
         void this.triggerFireDetectPipeline(updatedSensor, value).catch((err) => {

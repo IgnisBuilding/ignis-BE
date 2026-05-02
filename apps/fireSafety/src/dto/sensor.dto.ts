@@ -1,5 +1,23 @@
 import { IsNotEmpty, IsNumber, IsOptional, IsString } from 'class-validator';
 
+export class SensorReadingDto {
+  @IsString()
+  @IsNotEmpty()
+  uid: string;
+
+  @IsNumber()
+  @IsNotEmpty()
+  ppm: number;
+
+  @IsString()
+  @IsNotEmpty()
+  gas_type: string;
+
+  @IsNumber()
+  @IsNotEmpty()
+  timestamp: number;
+}
+
 export class CreateSensorDto {
   @IsString()
   @IsNotEmpty()

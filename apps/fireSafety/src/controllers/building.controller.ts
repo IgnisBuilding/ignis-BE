@@ -2825,9 +2825,11 @@ export class BuildingController {
                 floor_id = $2,
                 building_id = $3,
                 hardware_uid = $4,
+                warning_threshold = COALESCE($5, warning_threshold),
+                alert_threshold = COALESCE($6, alert_threshold),
                 updated_at = NOW()
-              WHERE id = $5
-            `, [roomId, floorId, buildingId, props?.hardware_uid || null, dbId]);
+              WHERE id = $7
+            `, [roomId, floorId, buildingId, props?.hardware_uid || null, props?.warning_threshold ?? null, props?.alert_threshold ?? null, dbId]);
             
             idMappings.sensors[props.id] = dbId;
             stats.sensors.added++;
@@ -2844,8 +2846,8 @@ export class BuildingController {
           const roomId = props?.linked_room_db_id ? parseInt(props?.linked_room_db_id) : null;
           
           const result = await queryRunner.query(`
-            INSERT INTO "sensors" (name, type, status, unit, value, room_id, floor_id, building_id, hardware_uid, created_at, updated_at)
-            VALUES ($1, $2, 'active', $3, 0, $4, $5, $6, $7, NOW(), NOW())
+            INSERT INTO "sensors" (name, type, status, unit, value, room_id, floor_id, building_id, hardware_uid, warning_threshold, alert_threshold, created_at, updated_at)
+            VALUES ($1, $2, 'active', $3, 0, $4, $5, $6, $7, $8, $9, NOW(), NOW())
             RETURNING id
           `, [
             props?.name || 'New Sensor',
@@ -2854,7 +2856,9 @@ export class BuildingController {
             roomId,
             floorId,
             buildingId,
-            props?.hardware_uid || null
+            props?.hardware_uid || null,
+            props?.warning_threshold ?? null,
+            props?.alert_threshold ?? null,
           ]);
           
           if (result.length > 0) {
@@ -2881,8 +2885,10 @@ export class BuildingController {
               room_id = $4,
               floor_id = $5,
               hardware_uid = $6,
+              warning_threshold = COALESCE($7, warning_threshold),
+              alert_threshold = COALESCE($8, alert_threshold),
               updated_at = NOW()
-            WHERE id = $7
+            WHERE id = $9
           `, [
             props?.name || 'Sensor',
             props?.sensor_type || 'gas',
@@ -2890,6 +2896,8 @@ export class BuildingController {
             roomId,
             floorId,
             props?.hardware_uid || null,
+            props?.warning_threshold ?? null,
+            props?.alert_threshold ?? null,
             dbId
           ]);
           stats.sensors.modified++;

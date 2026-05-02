@@ -16,6 +16,7 @@ import { FireDetectionService } from '../services/fire-detection.service';
 import {
   FireDetectionAlertDto,
   SensorAlertForwardDto,
+  FireConfirmedDto,
   CreateFireAlertConfigDto,
   UpdateFireAlertConfigDto,
 } from '../dto/fire-detection.dto';
@@ -56,8 +57,8 @@ export class FireDetectionController {
 
   /**
    * Receive forwarded sensor alert from a local ignis-BE instance.
-   * Updates the in-memory recentSensorAlerts map so the AND logic can fire
-   * when fire-detect also sends a camera alert to this (deployed) backend.
+   * Runs DB-based AND logic on the deployed backend so it can create a hazard
+   * if a camera detection has also fired in the same location within the window.
    * POST /fire-detection/sensor-alert
    */
   @Post('sensor-alert')
@@ -71,12 +72,28 @@ export class FireDetectionController {
       throw new UnauthorizedException('Invalid API key');
     }
 
-    this.fireDetectionService.recordSensorAlert(
-      { roomId: dto.room_id, floorId: dto.floor_id, buildingId: dto.building_id },
-      0,
-      dto.timestamp,
-    );
+    const hazardId = await this.fireDetectionService.checkAndLogic(dto.room_id, dto.building_id);
 
+    return { received: true, hazard_id: hazardId ?? undefined };
+  }
+
+  /**
+   * Receive a fire-confirmed event forwarded from a local ignis-BE instance.
+   * Emits fire.detected on this WS server so mobile clients receive the alarm.
+   * POST /fire-detection/fire-confirmed
+   */
+  @Post('fire-confirmed')
+  @Public()
+  receiveFireConfirmed(
+    @Body() dto: FireConfirmedDto,
+    @Headers('x-api-key') apiKey?: string,
+  ) {
+    const configuredApiKey = this.configService.get('FIRE_DETECT_API_KEY');
+    if (configuredApiKey && apiKey !== configuredApiKey) {
+      throw new UnauthorizedException('Invalid API key');
+    }
+
+    this.fireDetectionService.receiveFireConfirmed(dto);
     return { received: true };
   }
 

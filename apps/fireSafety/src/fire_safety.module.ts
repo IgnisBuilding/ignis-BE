@@ -62,7 +62,6 @@ import { FingerprintService } from './services/fingerprint.service';
 import { SettingsService } from './services/settings.service';
 import { NotificationService } from './services/notification.service';
 import { EmployeeService } from './services/employee.service';
-import { ArduinoSensorService } from './services/arduino-sensor.service';
 import { AuthService } from './services/auth.service';
 import { SensorService } from './services/sensor.service';
 import { AlertService } from './services/alert.service';
@@ -166,7 +165,6 @@ import { SensorLogAggregationService } from './services/sensor-log-aggregation.s
     SettingsService,
     NotificationService,
     EmployeeService,
-    ArduinoSensorService,
     SensorLogAggregationService,
   ],
 })

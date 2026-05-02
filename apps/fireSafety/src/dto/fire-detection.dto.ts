@@ -131,3 +131,47 @@ export class SensorAlertForwardDto {
   @IsNotEmpty()
   timestamp: number;
 }
+
+// Forwarded fire-confirmed event from a local ignis-BE instance.
+// Deployed BE uses this to emit fire.detected on its own WS (for mobile clients).
+export class FireConfirmedDto {
+  @IsString()
+  @IsNotEmpty()
+  camera_id: string;
+
+  @IsString()
+  @IsOptional()
+  camera_name?: string;
+
+  @IsNumber()
+  @IsNotEmpty()
+  building_id: number;
+
+  @IsNumber()
+  @IsOptional()
+  floor_id?: number;
+
+  @IsNumber()
+  @IsOptional()
+  room_id?: number;
+
+  @IsNumber()
+  @IsNotEmpty()
+  confidence: number;
+
+  @IsNumber()
+  @IsNotEmpty()
+  timestamp: number;
+
+  @IsNumber()
+  @IsOptional()
+  hazard_id?: number;
+
+  @IsString()
+  @IsNotEmpty()
+  severity: string;
+
+  @IsString()
+  @IsOptional()
+  location_description?: string;
+}
