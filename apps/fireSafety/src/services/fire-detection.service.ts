@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException, Logger, Inject, forwardRef, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, MoreThan, In } from 'typeorm';
+import { Repository, In } from 'typeorm';
 import * as http from 'http';
 import * as https from 'https';
 import { camera, fire_detection_log, fire_alert_config, hazards, nodes, SensorLog, Sensor } from '@app/entities';
@@ -312,9 +312,12 @@ export class FireDetectionService implements OnModuleInit, OnModuleDestroy {
   async checkAndLogic(roomId?: number | null, buildingId?: number | null): Promise<number | null> {
     if (!roomId && !buildingId) return null;
 
-    const since = new Date(Date.now() - this.sensorCameraConfirmWindowSeconds * 1000);
-
-    // Step 1: Find cameras in this building/room, then look up recent alert_triggered log
+    // Step 1: Find cameras in this building/room, then look up the most-recent camera log
+    // that is armed (alert_triggered=true) but has NOT yet created a hazard (hazard_id IS NULL).
+    // Using raw SQL + NOW() avoids timezone mismatch when the DB server is UTC but the JS
+    // process runs in a local timezone.  The hazard_id IS NULL guard ensures each camera
+    // detection can only ever trigger ONE hazard — stale logs from previous test runs cannot
+    // re-arm once a hazard has been created from them.
     const cameras = await this.cameraRepository.find({
       where: buildingId ? { building_id: buildingId } : { room_id: roomId! },
       select: ['id'],
@@ -322,16 +325,22 @@ export class FireDetectionService implements OnModuleInit, OnModuleDestroy {
     if (cameras.length === 0) return null;
 
     const cameraIds = cameras.map((c) => c.id);
-    const cameraLog = await this.fireDetectionLogRepository.findOne({
-      where: {
-        camera_id: In(cameraIds),
-        alert_triggered: true,
-        detection_timestamp: MoreThan(since),
-      },
-      order: { detection_timestamp: 'DESC' },
-    });
+    const cameraLogRows: { id: number; camera_id: number; confidence: number }[] =
+      await this.fireDetectionLogRepository.query(
+        `SELECT id, camera_id, confidence
+         FROM fire_detection_log
+         WHERE camera_id = ANY($1)
+           AND alert_triggered = true
+           AND hazard_id IS NULL
+           AND detection_timestamp > NOW() - ($2 * INTERVAL '1 second')
+         ORDER BY detection_timestamp DESC
+         LIMIT 1`,
+        [cameraIds, this.sensorCameraConfirmWindowSeconds],
+      );
 
-    if (!cameraLog) return null;
+    if (cameraLogRows.length === 0) return null;
+
+    const { id: cameraLogId, camera_id: cameraLogCameraId, confidence: cameraLogConfidence } = cameraLogRows[0];
 
     // Step 2: Find sensors in this building/room, then look up recent isAlert log.
     // Use raw SQL with NOW() so the comparison is fully server-side:
@@ -352,49 +361,83 @@ export class FireDetectionService implements OnModuleInit, OnModuleDestroy {
 
     if (sensorRows.length === 0) return null;
 
-    // Both confirmed — fetch camera for hazard creation and duplicate guard
-    const cam = await this.cameraRepository.findOne({ where: { id: cameraLog.camera_id } });
+    // Both confirmed — fetch camera for hazard creation and duplicate guards.
+    const cam = await this.cameraRepository.findOne({ where: { id: cameraLogCameraId } });
     if (!cam) return null;
 
+    const config = await this.getOrCreateConfig(cam.building_id);
+    const cooldownSecs = Math.max(
+      Number(config.cooldown_seconds ?? 60),
+      this.sensorCameraConfirmWindowSeconds,
+    );
+
+    // Guard 1: an active/pending/responded hazard already exists — return it without
+    // re-emitting fire.detected.  Also consume the camera log (set hazard_id) so it
+    // cannot re-trigger a NEW hazard once the current one is eventually cleared.
+    // Works for cameras with or without a room_id (falls back to floor_id).
+    let existingHazard: hazards | null = null;
     if (cam.room_id) {
-      // Guard 1: hazard being actively dealt with — return it without re-emitting
-      const existing = await this.hazardRepository.findOne({
+      existingHazard = await this.hazardRepository.findOne({
         where: { roomId: cam.room_id, type: 'fire', status: In(['active', 'pending', 'responded']) },
       });
-      if (existing) return existing.id;
+    } else if (cam.floor_id) {
+      existingHazard = await this.hazardRepository.findOne({
+        where: { floorId: cam.floor_id, type: 'fire', status: In(['active', 'pending', 'responded']) },
+      });
+    }
 
-      // Guard 2: cooldown — a hazard was already created for this room recently.
-      // Prevents spam-creating hazards when the user clears one but conditions still hold.
-      // Use raw SQL + NOW() to avoid timezone mismatch (hazards.created_at is DEFAULT now()).
-      // Clamp to at least sensorCameraConfirmWindowSeconds so a DB config of 0 can't disable it.
-      const config = await this.getOrCreateConfig(cam.building_id);
-      const cooldownSecs = Math.max(
-        Number(config.cooldown_seconds ?? 60),
-        this.sensorCameraConfirmWindowSeconds,
+    if (existingHazard) {
+      // Consume the log so it cannot arm a second hazard after this one is cleared
+      await this.fireDetectionLogRepository.query(
+        `UPDATE fire_detection_log SET hazard_id = $1 WHERE id = $2`,
+        [existingHazard.id, cameraLogId],
       );
-      const recentHazards: { id: number }[] = await this.hazardRepository.query(
+      return existingHazard.id;
+    }
+
+    // Guard 2: cooldown — a hazard was already created recently for this location.
+    // Prevents spam-creating hazards when the user clears one but conditions still hold.
+    // Use raw SQL + NOW() to avoid timezone mismatch (hazards.created_at is DEFAULT now()).
+    // Cameras without room_id fall back to a building-level check via node→floor join.
+    let recentHazards: { id: number }[];
+    if (cam.room_id) {
+      recentHazards = await this.hazardRepository.query(
         `SELECT id FROM hazards WHERE room_id = $1 AND type = 'fire' AND created_at > NOW() - ($2 * INTERVAL '1 second') LIMIT 1`,
         [cam.room_id, cooldownSecs],
       );
-      if (recentHazards.length > 0) {
-        this.logger.warn(`[AND] Room ${cam.room_id} in fire-detection cooldown (${cooldownSecs}s), skipping new hazard`);
-        return null;
-      }
+    } else {
+      recentHazards = await this.hazardRepository.query(
+        `SELECT h.id FROM hazards h
+         JOIN nodes n ON n.id = h.node_id
+         JOIN floor f ON n.floor_id = f.id
+         WHERE f.building_id = $1 AND h.type = 'fire'
+         AND h.created_at > NOW() - ($2 * INTERVAL '1 second')
+         LIMIT 1`,
+        [cam.building_id, cooldownSecs],
+      );
     }
 
-    const hazard = await this.createFireHazard(cam, cameraLog.confidence);
+    if (recentHazards.length > 0) {
+      this.logger.warn(`[AND] Location in fire-detection cooldown (${cooldownSecs}s), skipping new hazard`);
+      return null;
+    }
 
-    cameraLog.hazard_id = hazard.id;
-    await this.fireDetectionLogRepository.save(cameraLog);
+    const hazard = await this.createFireHazard(cam, cameraLogConfidence);
 
-    const severity = cameraLog.confidence >= 0.9 ? 'critical' : cameraLog.confidence >= 0.8 ? 'high' : 'medium';
+    // Consume the camera log — mark it as used so future checkAndLogic calls skip it
+    await this.fireDetectionLogRepository.query(
+      `UPDATE fire_detection_log SET hazard_id = $1 WHERE id = $2`,
+      [hazard.id, cameraLogId],
+    );
+
+    const severity = cameraLogConfidence >= 0.9 ? 'critical' : cameraLogConfidence >= 0.8 ? 'high' : 'medium';
     const fireEvent: FireDetectionEvent = {
       camera_id: cam.camera_id,
       camera_name: cam.name,
       building_id: cam.building_id,
       floor_id: cam.floor_id ?? undefined,
       room_id: cam.room_id ?? undefined,
-      confidence: cameraLog.confidence,
+      confidence: cameraLogConfidence,
       timestamp: Math.floor(Date.now() / 1000),
       hazard_id: hazard.id,
       severity,

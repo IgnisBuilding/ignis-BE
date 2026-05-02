@@ -702,6 +702,17 @@ export class FireSafetyController {
       const result = await this.dataSource.query(updateQuery);
       const deletedCount = result ? result.length : 0;
 
+      // Emit fire.resolved for each cleared hazard so connected clients (web, mobile) remove
+      // the active alert banner and suppress the alarm sound for the next few minutes.
+      if (result && result.length > 0) {
+        for (const row of result) {
+          this.fireDetectionGateway.emitFireResolved({
+            hazard_id: row.id,
+            building_id: body?.buildingId || 0,
+          });
+        }
+      }
+
       // Reset camera detection logs so checkAndLogic cannot immediately re-fire after the
       // Guard 2 cooldown expires.  Without this, any fire_detection_log row that still has
       // alert_triggered=true lets a single sensor tick re-create the hazard the moment the
