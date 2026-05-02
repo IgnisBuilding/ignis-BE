@@ -50,8 +50,15 @@ export class SensorService {
 
   async update(id: number, updateSensorDto: UpdateSensorDto) {
     const sensor = await this.findOne(id);
+    const thresholdChanged =
+      (updateSensorDto.alertThreshold !== undefined && updateSensorDto.alertThreshold !== sensor.alertThreshold) ||
+      (updateSensorDto.warningThreshold !== undefined && updateSensorDto.warningThreshold !== sensor.warningThreshold);
     Object.assign(sensor, { ...updateSensorDto, lastReading: new Date() });
-    return this.sensorRepository.save(sensor);
+    const saved = await this.sensorRepository.save(sensor);
+    if (thresholdChanged) {
+      await this.fireDetectionService.invalidatePendingCameraLogs(sensor.buildingId, sensor.roomId);
+    }
+    return saved;
   }
 
   async updateReading(id: number, value: number, status?: string, alertTypeOverride?: string) {

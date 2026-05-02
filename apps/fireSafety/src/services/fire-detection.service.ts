@@ -666,6 +666,33 @@ export class FireDetectionService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
+   * Invalidate pending ("armed") camera detection logs for a building or room.
+   * Called when sensor thresholds are updated so that stale logs from a previous
+   * fire-detect session cannot immediately trigger a hazard the moment the new
+   * lower threshold is crossed on the next sensor tick.
+   */
+  async invalidatePendingCameraLogs(buildingId?: number | null, roomId?: number | null): Promise<void> {
+    if (roomId) {
+      await this.fireDetectionLogRepository.query(
+        `UPDATE fire_detection_log SET alert_triggered = false
+         WHERE camera_id IN (SELECT id FROM camera WHERE room_id = $1)
+           AND alert_triggered = true
+           AND hazard_id IS NULL`,
+        [roomId],
+      );
+    } else if (buildingId) {
+      await this.fireDetectionLogRepository.query(
+        `UPDATE fire_detection_log SET alert_triggered = false
+         WHERE camera_id IN (SELECT id FROM camera WHERE building_id = $1)
+           AND alert_triggered = true
+           AND hazard_id IS NULL`,
+        [buildingId],
+      );
+    }
+    this.logger.log(`Pending camera logs invalidated (buildingId=${buildingId}, roomId=${roomId}) — threshold update`);
+  }
+
+  /**
    * Get detection stats
    */
   async getDetectionStats(buildingId?: number) {
