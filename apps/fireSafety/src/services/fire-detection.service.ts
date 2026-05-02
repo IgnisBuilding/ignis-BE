@@ -610,6 +610,19 @@ export class FireDetectionService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
+   * Reset detection state after a Clear All — called by clearFires endpoint.
+   * Clears the in-memory consecutiveDetections cache and resets alert_triggered in the
+   * DB for any camera logs created in the last 10 minutes.  The DB reset removes
+   * the "armed" flag so checkAndLogic cannot immediately re-fire on the next sensor
+   * tick; the cache reset forces the camera pipeline to rebuild 3 consecutive
+   * detections from scratch before it can re-arm.
+   */
+  async resetDetectionCache(): Promise<void> {
+    this.consecutiveDetections.clear();
+    this.logger.log('Consecutive detections cache cleared (triggered by Clear All)');
+  }
+
+  /**
    * Get detection stats
    */
   async getDetectionStats(buildingId?: number) {

@@ -18,6 +18,7 @@ import { PlaceFiresDto } from './dto/PlaceFires.dto';
 import { FindSafestPointDto } from './dto/FindSafestPoint.dto';
 import { FireDetectionGateway } from './gateways/fire-detection.gateway';
 import { NotificationService } from './services/notification.service';
+import { FireDetectionService } from './services/fire-detection.service';
 
 @Controller('fireSafety')
 export class FireSafetyController {
@@ -27,6 +28,7 @@ export class FireSafetyController {
     private readonly dataSource: DataSource,
     private readonly fireDetectionGateway: FireDetectionGateway,
     private readonly notificationService: NotificationService,
+    private readonly fireDetectionService: FireDetectionService,
   ) {}
 
   @Get('emergency/exits')
@@ -691,7 +693,7 @@ export class FireSafetyController {
    * are still above threshold.
    */
   @Post('clear-fires')
-  async clearFires(@Body() body?: { clearAll?: boolean }) {
+  async clearFires(@Body() body?: { clearAll?: boolean; buildingId?: number }) {
     try {
       const updateQuery = body?.clearAll
         ? `UPDATE hazards SET status = 'resolved', resolved_at = NOW(), updated_at = NOW() WHERE status IN ('active', 'pending', 'responded') RETURNING id`
@@ -699,6 +701,30 @@ export class FireSafetyController {
 
       const result = await this.dataSource.query(updateQuery);
       const deletedCount = result ? result.length : 0;
+
+      // Reset camera detection logs so checkAndLogic cannot immediately re-fire after the
+      // Guard 2 cooldown expires.  Without this, any fire_detection_log row that still has
+      // alert_triggered=true lets a single sensor tick re-create the hazard the moment the
+      // 60s cooldown window elapses — even when the camera is no longer pointed at fire.
+      if (body?.buildingId) {
+        await this.dataSource.query(
+          `UPDATE fire_detection_log SET alert_triggered = false
+           WHERE camera_id IN (SELECT id FROM camera WHERE building_id = $1)
+             AND alert_triggered = true
+             AND created_at > NOW() - INTERVAL '10 minutes'`,
+          [body.buildingId],
+        );
+      } else {
+        await this.dataSource.query(
+          `UPDATE fire_detection_log SET alert_triggered = false
+           WHERE alert_triggered = true
+             AND created_at > NOW() - INTERVAL '10 minutes'`,
+        );
+      }
+
+      // Clear the in-memory consecutiveDetections cache so the camera pipeline must rebuild
+      // 3 consecutive CLIP "dangerous" detections before it can re-arm.
+      await this.fireDetectionService.resetDetectionCache();
 
       return {
         success: true,
