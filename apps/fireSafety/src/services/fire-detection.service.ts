@@ -459,6 +459,22 @@ export class FireDetectionService implements OnModuleInit, OnModuleDestroy {
       return null;
     }
 
+    // Hard refusal: a camera with no room_id will produce a hazard with NULL room_id,
+    // which the FE map cannot render and which would make mobile clients alarm with
+    // no visible cause.  Disarm the log and skip — better to lose this trigger than
+    // produce a phantom alarm.  The fire-detect operator should fix the camera's
+    // room_id; consume the log so it doesn't keep matching on every sensor tick.
+    if (cam.room_id == null) {
+      await this.fireDetectionLogRepository.query(
+        `UPDATE fire_detection_log SET alert_triggered = false WHERE id = $1`,
+        [cameraLogId],
+      );
+      this.logger.warn(
+        `${callTag} camera ${cam.camera_id} (id=${cam.id}, name='${cam.name}') has NULL room_id — refusing to create roomless hazard, disarmed log ${cameraLogId}`,
+      );
+      return null;
+    }
+
     const config = await this.getOrCreateConfig(cam.building_id);
     const cooldownSecs = Math.max(
       Number(config.cooldown_seconds ?? 60),

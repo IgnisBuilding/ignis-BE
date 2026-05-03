@@ -142,6 +142,27 @@ export class FireDetectionGateway implements OnGatewayInit, OnGatewayConnection,
   }
 
   /**
+   * Opt into the global sensor dashboard stream (admin sensor pages, etc.).
+   * Without joining this room, sensor.reading and sensor.alert events are not
+   * delivered.  This prevents mobile/evacuee clients from receiving high-frequency
+   * sensor traffic they don't need.
+   */
+  @SubscribeMessage('subscribe:sensors')
+  handleSubscribeSensorDashboard(client: Socket) {
+    client.join('sensor:dashboard');
+    if (this.websocketLifecycleLogs) {
+      this.logger.log(`Client ${client.id} subscribed to sensor:dashboard`);
+    }
+    return { event: 'subscribed', data: { room: 'sensor:dashboard' } };
+  }
+
+  @SubscribeMessage('unsubscribe:sensors')
+  handleUnsubscribeSensorDashboard(client: Socket) {
+    client.leave('sensor:dashboard');
+    return { event: 'unsubscribed', data: { room: 'sensor:dashboard' } };
+  }
+
+  /**
    * Emit fire detection event to all connected clients
    * Called by FireDetectionService when an alert is triggered
    */
@@ -217,42 +238,55 @@ export class FireDetectionGateway implements OnGatewayInit, OnGatewayConnection,
   }
 
   /**
-   * Emit sensor reading event
+   * Emit sensor reading event.  Same room-scoped policy as emitSensorAlert: only
+   * deliver to the dedicated 'sensor:dashboard' room and the per-building room.
+   * Avoids flooding every connected client with high-frequency sensor packets.
    */
   emitSensorReading(event: SensorReadingEvent) {
     if (!this.isReady()) {
       return;
     }
 
-    this.server.emit('sensor.reading', event);
-
     if (event.building_id) {
       this.server.to(`building:${event.building_id}`).emit('sensor.reading:building', event);
     }
+    this.server.to('sensor:dashboard').emit('sensor.reading', event);
 
     if (this.sensorReadingDebugLogs) {
       this.logger.debug(
-        `Sensor reading emitted - ${event.sensor_key}=${event.value}${event.unit}, status=${event.status}`,
+        `Sensor reading emitted (room-scoped) - ${event.sensor_key}=${event.value}${event.unit}, status=${event.status}`,
       );
     }
   }
 
   /**
-   * Emit sensor alert event when threshold is breached
+   * Emit sensor alert event when threshold is breached.
+   *
+   * Sensor alerts must NOT broadcast to every connected client because the mobile
+   * Android app and resident/evacuee web clients connect to this same /fire-detection
+   * namespace.  Even though those clients don't subscribe to the 'sensor.alert' event
+   * name, broadcasting here floods every socket with traffic on every reading.  Worse,
+   * any future client-side handler that checks payload-by-payload could
+   * accidentally interpret these as fire alarms.
+   *
+   * Sensor alerts should ONLY reach:
+   *   1. The building room (admins/managers viewing that building's sensor dashboard).
+   *   2. A dedicated 'sensor:dashboard' room for the global admin sensors page.
+   *
+   * Use `subscribe:sensors` (handled below) to opt into the dashboard stream.
    */
   emitSensorAlert(event: SensorReadingEvent) {
     if (!this.isReady()) {
       return;
     }
 
-    this.server.emit('sensor.alert', event);
-
     if (event.building_id) {
       this.server.to(`building:${event.building_id}`).emit('sensor.alert:building', event);
     }
+    this.server.to('sensor:dashboard').emit('sensor.alert', event);
 
     this.logger.warn(
-      `Sensor alert emitted - ${event.sensor_key}=${event.value}${event.unit}, building=${event.building_id ?? 'n/a'}`,
+      `Sensor alert emitted (room-scoped) - ${event.sensor_key}=${event.value}${event.unit}, building=${event.building_id ?? 'n/a'}`,
     );
   }
 
