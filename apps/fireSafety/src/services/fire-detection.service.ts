@@ -20,6 +20,16 @@ export class FireDetectionService implements OnModuleInit, OnModuleDestroy {
   // In-memory cache for consecutive detection tracking
   private consecutiveDetections: Map<string, { count: number; lastTimestamp: number }> = new Map();
 
+  // Per-location throttle for fire.detected WS emits.  Even when AND logic legitimately
+  // produces a new hazard, never re-emit fire.detected for the same room/floor within
+  // FIRE_DETECTED_EMIT_THROTTLE_MS — the mobile app's FireAlertService plays a 5-second
+  // alarm on every event with no debounce, so back-to-back emits create the
+  // "continuous alarm" symptom even when hazards are actually distinct.
+  private lastFireEmitByLocation: Map<string, number> = new Map();
+  private readonly FIRE_DETECTED_EMIT_THROTTLE_MS = Number(
+    process.env.FIRE_DETECTED_EMIT_THROTTLE_MS || 30000, // 30s
+  );
+
   // Cache cleanup interval (runs every 60 seconds)
   private cacheCleanupInterval: NodeJS.Timeout | null = null;
   private readonly CACHE_CLEANUP_INTERVAL_MS = 60000; // 1 minute
@@ -312,6 +322,8 @@ export class FireDetectionService implements OnModuleInit, OnModuleDestroy {
   async checkAndLogic(roomId?: number | null, buildingId?: number | null): Promise<number | null> {
     if (!roomId && !buildingId) return null;
 
+    const callTag = `[AND room=${roomId ?? '-'} bld=${buildingId ?? '-'}]`;
+
     // Step 1: Find cameras in this building/room, then look up the most-recent camera log
     // that is armed (alert_triggered=true) but has NOT yet created a hazard (hazard_id IS NULL).
     // Using raw SQL + NOW() avoids timezone mismatch when the DB server is UTC but the JS
@@ -322,7 +334,10 @@ export class FireDetectionService implements OnModuleInit, OnModuleDestroy {
       where: buildingId ? { building_id: buildingId } : { room_id: roomId! },
       select: ['id'],
     });
-    if (cameras.length === 0) return null;
+    if (cameras.length === 0) {
+      this.logger.debug(`${callTag} no cameras for location → skip`);
+      return null;
+    }
 
     const cameraIds = cameras.map((c) => c.id);
     const cameraLogRows: { id: number; camera_id: number; confidence: number }[] =
@@ -338,9 +353,17 @@ export class FireDetectionService implements OnModuleInit, OnModuleDestroy {
         [cameraIds, this.sensorCameraConfirmWindowSeconds],
       );
 
-    if (cameraLogRows.length === 0) return null;
+    if (cameraLogRows.length === 0) {
+      this.logger.log(
+        `${callTag} no armed camera log (alert_triggered=true AND hazard_id IS NULL within ${this.sensorCameraConfirmWindowSeconds}s) → skip`,
+      );
+      return null;
+    }
 
     const { id: cameraLogId, camera_id: cameraLogCameraId, confidence: cameraLogConfidence } = cameraLogRows[0];
+    this.logger.log(
+      `${callTag} found armed camera log id=${cameraLogId} cam=${cameraLogCameraId} conf=${cameraLogConfidence}`,
+    );
 
     // Step 2: Find sensors in this building/room, then look up recent isAlert log.
     // Use raw SQL with NOW() so the comparison is fully server-side:
@@ -359,11 +382,17 @@ export class FireDetectionService implements OnModuleInit, OnModuleDestroy {
       [sensorIds, this.sensorCameraConfirmWindowSeconds],
     );
 
-    if (sensorRows.length === 0) return null;
+    if (sensorRows.length === 0) {
+      this.logger.log(`${callTag} no recent sensor alert → skip`);
+      return null;
+    }
 
     // Both confirmed — fetch camera for hazard creation and duplicate guards.
     const cam = await this.cameraRepository.findOne({ where: { id: cameraLogCameraId } });
-    if (!cam) return null;
+    if (!cam) {
+      this.logger.warn(`${callTag} camera id=${cameraLogCameraId} not found → skip`);
+      return null;
+    }
 
     const config = await this.getOrCreateConfig(cam.building_id);
     const cooldownSecs = Math.max(
@@ -392,6 +421,9 @@ export class FireDetectionService implements OnModuleInit, OnModuleDestroy {
         `UPDATE fire_detection_log SET hazard_id = $1 WHERE id = $2`,
         [existingHazard.id, cameraLogId],
       );
+      this.logger.log(
+        `${callTag} active hazard ${existingHazard.id} already exists → consumed log ${cameraLogId}, NOT emitting fire.detected`,
+      );
       return existingHazard.id;
     }
 
@@ -418,9 +450,26 @@ export class FireDetectionService implements OnModuleInit, OnModuleDestroy {
     }
 
     if (recentHazards.length > 0) {
-      this.logger.warn(`[AND] Location in fire-detection cooldown (${cooldownSecs}s), skipping new hazard`);
+      // Cooldown active — also consume this log so we don't keep scanning it on every tick.
+      // Without this, the same log keeps matching the camera-log query each sensor tick,
+      // wasting cycles and risking re-emit if the cooldown happens to expire mid-test.
+      await this.fireDetectionLogRepository.query(
+        `UPDATE fire_detection_log SET alert_triggered = false WHERE id = $1`,
+        [cameraLogId],
+      );
+      this.logger.warn(
+        `${callTag} cooldown active (${cooldownSecs}s, recent hazard exists) → disarmed log ${cameraLogId}, skipping new hazard`,
+      );
       return null;
     }
+
+    // Per-location WS throttle: if we just emitted fire.detected for this room/floor very
+    // recently, don't emit again even though we're about to create a new hazard.
+    // The hazard still gets created (so the map auto-place flow works) but the alarm
+    // sound won't re-trigger on mobile within the throttle window.
+    const locationKey = cam.room_id ? `r:${cam.room_id}` : cam.floor_id ? `f:${cam.floor_id}` : `b:${cam.building_id}`;
+    const lastEmit = this.lastFireEmitByLocation.get(locationKey) ?? 0;
+    const sinceLastEmit = Date.now() - lastEmit;
 
     const hazard = await this.createFireHazard(cam, cameraLogConfidence);
 
@@ -429,6 +478,14 @@ export class FireDetectionService implements OnModuleInit, OnModuleDestroy {
       `UPDATE fire_detection_log SET hazard_id = $1 WHERE id = $2`,
       [hazard.id, cameraLogId],
     );
+
+    if (sinceLastEmit < this.FIRE_DETECTED_EMIT_THROTTLE_MS) {
+      this.logger.warn(
+        `${callTag} hazard ${hazard.id} created but fire.detected emit throttled (${sinceLastEmit}ms < ${this.FIRE_DETECTED_EMIT_THROTTLE_MS}ms since last emit at ${locationKey})`,
+      );
+      return hazard.id;
+    }
+    this.lastFireEmitByLocation.set(locationKey, Date.now());
 
     const severity = cameraLogConfidence >= 0.9 ? 'critical' : cameraLogConfidence >= 0.8 ? 'high' : 'medium';
     const fireEvent: FireDetectionEvent = {
@@ -444,6 +501,9 @@ export class FireDetectionService implements OnModuleInit, OnModuleDestroy {
       location_description: cam.location_description ?? undefined,
     };
 
+    this.logger.log(
+      `${callTag} EMITTING fire.detected hazard=${hazard.id} cam='${cam.name}' (${cam.camera_id}) sev=${severity} conf=${cameraLogConfidence}`,
+    );
     this.fireDetectionGateway.emitFireDetected(fireEvent);
 
     // Forward to deployed BE so its WS clients (e.g. mobile WebView) receive fire.detected.
@@ -662,7 +722,10 @@ export class FireDetectionService implements OnModuleInit, OnModuleDestroy {
    */
   async resetDetectionCache(): Promise<void> {
     this.consecutiveDetections.clear();
-    this.logger.log('Consecutive detections cache cleared (triggered by Clear All)');
+    // Also clear the per-location fire.detected emit throttle so a genuine fire AFTER
+    // Clear All can re-alarm immediately (don't wait for the 30s throttle to expire).
+    this.lastFireEmitByLocation.clear();
+    this.logger.log('Consecutive detections cache + fire emit throttle cleared (triggered by Clear All)');
   }
 
   /**
