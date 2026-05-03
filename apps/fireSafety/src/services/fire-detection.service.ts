@@ -324,14 +324,63 @@ export class FireDetectionService implements OnModuleInit, OnModuleDestroy {
 
     const callTag = `[AND room=${roomId ?? '-'} bld=${buildingId ?? '-'}]`;
 
+    // Resolve buildingId from roomId if only roomId was given.  Without this, downstream
+    // building-level queries (active-hazard hard guard, sensor/camera lookups) silently
+    // fall back to room-only filters and miss records that have buildingId but not roomId.
+    // room.floor_id → floor.building_id chain — room itself has no building_id column.
+    let effectiveBuildingId: number | null | undefined = buildingId;
+    if (!effectiveBuildingId && roomId) {
+      const buildingRows: { building_id: number }[] = await this.cameraRepository.query(
+        `SELECT f.building_id FROM room r JOIN floor f ON f.id = r.floor_id WHERE r.id = $1 LIMIT 1`,
+        [roomId],
+      );
+      effectiveBuildingId = buildingRows?.[0]?.building_id ?? null;
+    }
+
+    // ── HARD GUARD ──────────────────────────────────────────────────────
+    // If ANY active fire hazard already exists in this building, return its id and do
+    // NOT create a new hazard.  This is the top-level safety net: it doesn't matter how
+    // sloppy the room/floor/node linkage is on cameras, sensors, or hazards — while a
+    // building has an unresolved fire, sensor ticks must not spawn new ones.  Catches
+    // every gap in Guard 1 / Guard 2 below (NULL room_id, NULL floor_id, missing node_id).
+    if (effectiveBuildingId) {
+      const activeBuildingHazards: { id: number }[] = await this.hazardRepository.query(
+        `SELECT h.id
+         FROM hazards h
+         LEFT JOIN room r ON r.id = h.room_id
+         LEFT JOIN floor f_room ON f_room.id = r.floor_id
+         LEFT JOIN floor f_haz ON f_haz.id = h.floor_id
+         LEFT JOIN nodes n ON n.id = h.node_id
+         LEFT JOIN floor f_node ON f_node.id = n.floor_id
+         WHERE h.type = 'fire'
+           AND h.status IN ('active', 'pending', 'responded')
+           AND (
+             f_room.building_id = $1
+             OR f_haz.building_id = $1
+             OR f_node.building_id = $1
+           )
+         ORDER BY h.created_at DESC
+         LIMIT 1`,
+        [effectiveBuildingId],
+      );
+      if (activeBuildingHazards.length > 0) {
+        this.logger.log(
+          `${callTag} active fire hazard ${activeBuildingHazards[0].id} already exists in building ${effectiveBuildingId} → returning existing, NOT emitting`,
+        );
+        return activeBuildingHazards[0].id;
+      }
+    }
+
     // Step 1: Find cameras in this building/room, then look up the most-recent camera log
     // that is armed (alert_triggered=true) but has NOT yet created a hazard (hazard_id IS NULL).
-    // Using raw SQL + NOW() avoids timezone mismatch when the DB server is UTC but the JS
-    // process runs in a local timezone.  The hazard_id IS NULL guard ensures each camera
-    // detection can only ever trigger ONE hazard — stale logs from previous test runs cannot
-    // re-arm once a hazard has been created from them.
+    // Use OR-based filter (room OR building) so cameras with only roomId or only buildingId
+    // populated are both found.  Strict {buildingId: X} would miss cameras that have only
+    // roomId set, and vice versa.
+    const cameraWhere: any[] = [];
+    if (roomId) cameraWhere.push({ room_id: roomId });
+    if (effectiveBuildingId) cameraWhere.push({ building_id: effectiveBuildingId });
     const cameras = await this.cameraRepository.find({
-      where: buildingId ? { building_id: buildingId } : { room_id: roomId! },
+      where: cameraWhere,
       select: ['id'],
     });
     if (cameras.length === 0) {
@@ -340,6 +389,11 @@ export class FireDetectionService implements OnModuleInit, OnModuleDestroy {
     }
 
     const cameraIds = cameras.map((c) => c.id);
+    // CRITICAL: use created_at (server-side, set by PG DEFAULT now()) NOT detection_timestamp
+    // (client-side, comes from the Python pipeline's clock).  detection_timestamp is
+    // vulnerable to clock skew between the fire-detect pipeline machine and the BE/DB,
+    // and in `timestamp without time zone` columns the pg driver drops the offset.
+    // Freshness checks must compare server-set columns to server NOW().
     const cameraLogRows: { id: number; camera_id: number; confidence: number }[] =
       await this.fireDetectionLogRepository.query(
         `SELECT id, camera_id, confidence
@@ -347,15 +401,15 @@ export class FireDetectionService implements OnModuleInit, OnModuleDestroy {
          WHERE camera_id = ANY($1)
            AND alert_triggered = true
            AND hazard_id IS NULL
-           AND detection_timestamp > NOW() - ($2 * INTERVAL '1 second')
-         ORDER BY detection_timestamp DESC
+           AND created_at > NOW() - ($2 * INTERVAL '1 second')
+         ORDER BY created_at DESC
          LIMIT 1`,
         [cameraIds, this.sensorCameraConfirmWindowSeconds],
       );
 
     if (cameraLogRows.length === 0) {
       this.logger.log(
-        `${callTag} no armed camera log (alert_triggered=true AND hazard_id IS NULL within ${this.sensorCameraConfirmWindowSeconds}s) → skip`,
+        `${callTag} no armed camera log (alert_triggered=true AND hazard_id IS NULL within ${this.sensorCameraConfirmWindowSeconds}s of NOW server-time) → skip`,
       );
       return null;
     }
@@ -366,15 +420,26 @@ export class FireDetectionService implements OnModuleInit, OnModuleDestroy {
     );
 
     // Step 2: Find sensors in this building/room, then look up recent isAlert log.
-    // Use raw SQL with NOW() so the comparison is fully server-side:
-    // sensor_log.created_at is set by PostgreSQL DEFAULT now() (server UTC),
-    // but TypeORM/pg serializes JS Date params in local time — timezone mismatch
-    // causes MoreThan(since) to always fail on non-UTC machines.
+    // Use OR-based filter (room OR building) — same rationale as the camera query above.
+    // A sensor created via Map Editor often has roomId but no buildingId (or vice versa);
+    // the strict-AND form was missing rows and producing the false "awaiting sensor
+    // confirmation" response even when sensor_log clearly had is_alert=true rows.
+    // Use raw SQL with NOW() for the time check to avoid TypeORM/pg local-time
+    // serialization clashing with PostgreSQL UTC.
+    const sensorWhere: any[] = [];
+    if (roomId) sensorWhere.push({ roomId });
+    if (effectiveBuildingId) sensorWhere.push({ buildingId: effectiveBuildingId });
     const sensors = await this.sensorRepository.find({
-      where: buildingId ? { buildingId } : { roomId: roomId! },
+      where: sensorWhere,
       select: ['id'],
     });
-    if (sensors.length === 0) return null;
+    if (sensors.length === 0) {
+      this.logger.warn(
+        `${callTag} no sensors found for location — sensor_agent readings cannot match. Check sensor.roomId/buildingId in DB.`,
+      );
+      return null;
+    }
+    this.logger.log(`${callTag} matched ${sensors.length} sensor(s) for location`);
 
     const sensorIds = sensors.map((s) => s.id);
     const sensorRows: { id: number }[] = await this.sensorLogRepository.query(
