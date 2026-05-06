@@ -27,4 +27,12 @@ export class ChatResponseDto {
   @ValidateNested()
   @Type(() => ChatVoiceDto)
   voice: ChatVoiceDto;
+
+  @IsOptional()
+  @IsIn(['completed', 'queued', 'processing', 'failed'])
+  status?: 'completed' | 'queued' | 'processing' | 'failed';
+
+  @IsOptional()
+  @IsString()
+  jobId?: string;
 }

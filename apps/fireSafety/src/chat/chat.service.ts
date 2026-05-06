@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { ChatInputDto } from './dto/chat-input.dto';
 import { ChatResponseDto } from './dto/chat-response.dto';
-import { ChatOrchestratorService } from '../ai/orchestrator/chat-orchestrator.service';
+import { AiOrchestratorService } from '../ai/orchestrator/ai-orchestrator.service';
 
 interface AuthUser {
   userId?: number | string;
@@ -11,13 +11,17 @@ interface AuthUser {
 @Injectable()
 export class ChatService {
   constructor(
-    private readonly chatOrchestratorService: ChatOrchestratorService,
+    private readonly aiOrchestratorService: AiOrchestratorService,
   ) {}
 
   async chat(
     input: ChatInputDto,
     authUser?: AuthUser,
   ): Promise<ChatResponseDto> {
-    return this.chatOrchestratorService.orchestrate(input, authUser);
+    return this.aiOrchestratorService.route(input, authUser);
+  }
+
+  getJob(jobId: string) {
+    return this.aiOrchestratorService.getJob(jobId);
   }
 }

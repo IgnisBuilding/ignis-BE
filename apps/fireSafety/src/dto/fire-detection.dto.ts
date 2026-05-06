@@ -26,6 +26,14 @@ export class DetectionItem {
 
   @IsString()
   label: string;
+
+  @IsOptional()
+  @IsString()
+  fire_context?: string;
+
+  @IsOptional()
+  @IsNumber()
+  clip_confidence?: number;
 }
 
 // Fire detection alert from fire-detect pipeline
@@ -46,6 +54,10 @@ export class FireDetectionAlertDto {
   @IsNumber()
   @IsOptional()
   latency?: number; // Inference latency in seconds
+
+  @IsString()
+  @IsOptional()
+  frame_b64?: string; // Base64-encoded JPEG frame for VLM reasoning in ignis-AI
 }
 
 // Response from fire detection alert endpoint

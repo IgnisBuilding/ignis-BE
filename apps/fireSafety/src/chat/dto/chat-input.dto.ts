@@ -33,4 +33,12 @@ export class ChatInputDto {
   @IsOptional()
   @IsString()
   societyName?: string;
+
+  @IsOptional()
+  @IsIn(['auto', 'sync', 'async'])
+  processingMode?: 'auto' | 'sync' | 'async' = 'auto';
+
+  @IsOptional()
+  @IsIn(['normal_chat', 'vision_reasoning'])
+  taskType?: 'normal_chat' | 'vision_reasoning' = 'normal_chat';
 }

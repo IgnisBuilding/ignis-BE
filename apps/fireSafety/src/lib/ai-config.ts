@@ -1,11 +1,11 @@
-export type LlmProvider = 'openai' | 'ollama';
+export type LlmProvider = 'gemini' | 'ollama';
 export type McpTransport = 'none' | 'stdio';
 
 export interface AiConfig {
   provider: LlmProvider;
   mcpTransport: McpTransport;
-  openAiApiKey?: string;
-  openAiModel: string;
+  geminiApiKey?: string;
+  geminiModel: string;
   ollamaApiKey?: string;
   ollamaBaseUrl: string;
   ollamaModel: string;
@@ -24,7 +24,7 @@ function parsePositiveInt(
 }
 
 function parseProvider(value: string | undefined): LlmProvider {
-  return value?.toLowerCase() === 'ollama' ? 'ollama' : 'openai';
+  return value?.toLowerCase() === 'ollama' ? 'ollama' : 'gemini';
 }
 
 function parseTransport(value: string | undefined): McpTransport {
@@ -39,23 +39,23 @@ export function getAiConfig(): AiConfig {
   cachedConfig = {
     provider: parseProvider(process.env.LLM_PROVIDER),
     mcpTransport: parseTransport(process.env.MCP_TRANSPORT),
-    openAiApiKey: process.env.OPENAI_API_KEY,
-    openAiModel: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+    geminiApiKey: process.env.GEMINI_API_KEY,
+    geminiModel: process.env.GEMINI_MODEL || 'gemini-2.5-flash',
     ollamaApiKey: process.env.OLLAMA_API_KEY,
     ollamaBaseUrl: process.env.OLLAMA_BASE_URL || '',
-    ollamaModel: process.env.OLLAMA_MODEL || 'gemma4:31b',
-    llmTimeoutMs: parsePositiveInt(process.env.LLM_TIMEOUT_MS, 30000),
-    mcpToolTimeoutMs: parsePositiveInt(process.env.MCP_TOOL_TIMEOUT_MS, 15000),
-    mcpRetryCount: parsePositiveInt(process.env.MCP_RETRY_COUNT, 1),
+    ollamaModel: process.env.OLLAMA_MODEL || 'gemma3:4b',
+    llmTimeoutMs: parsePositiveInt(process.env.LLM_TIMEOUT_MS, 60000),
+    mcpToolTimeoutMs: parsePositiveInt(process.env.MCP_TOOL_TIMEOUT_MS, 60000),
+    mcpRetryCount: parsePositiveInt(process.env.MCP_RETRY_COUNT, 3),
   };
 
   return cachedConfig;
 }
 
 export function validateAiConfig(config = getAiConfig()): void {
-  if (config.provider === 'openai' && !config.openAiApiKey) {
+  if (config.provider === 'gemini' && !config.geminiApiKey) {
     throw new Error(
-      'Invalid AI configuration: OPENAI_API_KEY is required when LLM_PROVIDER=openai.',
+      'Invalid AI configuration: GEMINI_API_KEY is required when LLM_PROVIDER=gemini.',
     );
   }
 

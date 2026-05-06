@@ -11,13 +11,12 @@ import { JwtAuthGuard } from '../guards/jwt-auth.guard';
 import { ChatController } from './chat.controller';
 import { ChatService } from './chat.service';
 import { ChatOrchestratorService } from '../ai/orchestrator/chat-orchestrator.service';
+import { AiOrchestratorService } from '../ai/orchestrator/ai-orchestrator.service';
 import { ScopeResolverService } from '../ai/context/scope-resolver.service';
 import { SafetyEngineService } from '../ai/safety/safety-engine.service';
 import { ContextBuilderService } from '../ai/context/context-builder.service';
 import { PromptBuilderService } from '../ai/prompt-builder/prompt-builder.service';
 import { LLMRouterService } from '../ai/llm-router/llm-router.service';
-import { McpProxyController } from '../mcp/mcp-proxy.controller';
-import { McpProxyService } from '../mcp/mcp-proxy.service';
 
 class TestJwtAuthGuard implements CanActivate {
   canActivate(context: ExecutionContext): boolean {
@@ -51,25 +50,21 @@ describe('Chat Integration', () => {
       .mockReturnValue({ systemPrompt: 'sys', userPrompt: 'user-msg' }),
   };
   const llmRouterMock = {
-    generate: jest.fn().mockResolvedValue('normal response'),
+    generate: jest.fn().mockResolvedValue({ text: 'normal response', sessionId: 'session-1' }),
   };
-  const mcpProxyServiceMock = {
-    callTool: jest.fn().mockResolvedValue({ ok: true }),
-  };
-
   beforeAll(async () => {
     const moduleFixture: TestingModule = await Test.createTestingModule({
-      controllers: [ChatController, McpProxyController],
+      controllers: [ChatController],
       providers: [
         RolesGuard,
         ChatService,
+        AiOrchestratorService,
         ChatOrchestratorService,
         { provide: ScopeResolverService, useValue: scopeResolverMock },
         { provide: SafetyEngineService, useValue: safetyEngineMock },
         { provide: ContextBuilderService, useValue: contextBuilderMock },
         { provide: PromptBuilderService, useValue: promptBuilderMock },
         { provide: LLMRouterService, useValue: llmRouterMock },
-        { provide: McpProxyService, useValue: mcpProxyServiceMock },
       ],
     })
       .overrideGuard(JwtAuthGuard)
@@ -84,7 +79,7 @@ describe('Chat Integration', () => {
   });
 
   afterAll(async () => {
-    await app.close();
+    await app?.close();
   });
 
   beforeEach(() => {
@@ -95,7 +90,7 @@ describe('Chat Integration', () => {
       source: 'input_id',
     });
     safetyEngineMock.check.mockResolvedValue({ override: false });
-    llmRouterMock.generate.mockResolvedValue('normal response');
+    llmRouterMock.generate.mockResolvedValue({ text: 'normal response', sessionId: 'session-1' });
   });
 
   it('POST /chat normal flow returns mode=normal and calls router', async () => {
@@ -107,6 +102,7 @@ describe('Chat Integration', () => {
       .expect(({ body }: { body: Record<string, unknown> }) => {
         expect(typeof body['text']).toBe('string');
         expect(body['mode']).toBe('normal');
+        expect(body['status']).toBe('completed');
         const voice = body['voice'] as Record<string, unknown>;
         expect(typeof voice['language']).toBe('string');
       });
@@ -138,6 +134,28 @@ describe('Chat Integration', () => {
       });
 
     expect(llmRouterMock.generate).not.toHaveBeenCalled();
+  });
+
+  it('POST /chat queues vision reasoning and exposes job status', async () => {
+    const server = app.getHttpServer() as Parameters<typeof request>[0];
+    let jobId = '';
+
+    await request(server)
+      .post('/chat')
+      .send({ message: 'analyze camera fire scene', language: 'en', taskType: 'vision_reasoning' })
+      .expect(201)
+      .expect(({ body }: { body: Record<string, unknown> }) => {
+        expect(body['status']).toBe('queued');
+        expect(typeof body['jobId']).toBe('string');
+        jobId = body['jobId'] as string;
+      });
+
+    await request(server)
+      .get(`/chat/jobs/${jobId}`)
+      .expect(200)
+      .expect(({ body }: { body: Record<string, unknown> }) => {
+        expect(['queued', 'processing', 'completed']).toContain(body['status']);
+      });
   });
 
 });

@@ -251,7 +251,7 @@ export class FireDetectionGateway implements OnGatewayInit, OnGatewayConnection,
       this.server.to(`building:${event.building_id}`).emit('sensor.alert:building', event);
     }
 
-    this.logger.warn(
+    this.logger.log(
       `Sensor alert emitted - ${event.sensor_key}=${event.value}${event.unit}, building=${event.building_id ?? 'n/a'}`,
     );
   }

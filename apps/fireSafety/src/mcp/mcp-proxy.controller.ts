@@ -3,6 +3,7 @@ import {
   Controller,
   Delete,
   Get,
+  Headers,
   HttpException,
   HttpStatus,
   Param,
@@ -189,6 +190,23 @@ export class McpProxyController {
   @Post('callTool')
   @Roles(Role.ADMIN)
   async callTool(@Body() body: McpToolRequestDto) {
+    return this.execute(body.toolName, body.args);
+  }
+
+  /**
+   * Internal service-to-service endpoint.
+   * Secured by a shared secret in X-Internal-Secret header instead of JWT.
+   * Allows ignis-AI to call any registered MCP tool directly.
+   */
+  @Post('internal/callTool')
+  async internalCallTool(
+    @Body() body: McpToolRequestDto,
+    @Headers('x-internal-secret') secret: string,
+  ) {
+    const expected = process.env.IGNIS_INTERNAL_SECRET;
+    if (!expected || secret !== expected) {
+      throw new HttpException('Forbidden', HttpStatus.FORBIDDEN);
+    }
     return this.execute(body.toolName, body.args);
   }
 

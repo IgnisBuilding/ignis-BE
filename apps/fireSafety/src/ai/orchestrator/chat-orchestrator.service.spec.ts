@@ -44,7 +44,7 @@ describe('ChatOrchestratorService', () => {
       systemPrompt: 'sys',
       userPrompt: 'msg',
     });
-    llmRouterService.generate.mockResolvedValue('ok');
+    llmRouterService.generate.mockResolvedValue({ text: 'ok', sessionId: 'session-1' });
 
     await service.orchestrate({ message: 'test', language: 'en' } as any, {
       userId: 1,
@@ -104,7 +104,7 @@ describe('ChatOrchestratorService', () => {
       systemPrompt: 'sys',
       userPrompt: 'msg',
     });
-    llmRouterService.generate.mockResolvedValue('Normal answer');
+    llmRouterService.generate.mockResolvedValue({ text: 'Normal answer', sessionId: 'session-1' });
 
     const result = await service.orchestrate({
       message: 'hello',

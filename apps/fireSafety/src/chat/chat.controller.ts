@@ -1,4 +1,4 @@
-import { Body, Controller, Post, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, NotFoundException, Param, Post, Req, UseGuards } from '@nestjs/common';
 import { Request } from 'express';
 import { JwtAuthGuard } from '../guards/jwt-auth.guard';
 import { RolesGuard } from '../guards/roles.guard';
@@ -27,5 +27,25 @@ export class ChatController {
   async chat(@Body() body: ChatInputDto, @Req() req: Request) {
     const user = req.user as { userId?: number; role?: string } | undefined;
     return this.chatService.chat(body, user);
+  }
+
+  @Get('jobs/:jobId')
+  @Roles(
+    Role.ADMIN,
+    Role.MANAGEMENT,
+    Role.BUILDING_AUTHORITY,
+    Role.COMMANDER,
+    Role.FIREFIGHTER,
+    Role.FIREFIGHTER_DISTRICT,
+    Role.FIREFIGHTER_STATE,
+    Role.FIREFIGHTER_HQ,
+    Role.RESIDENT,
+  )
+  getJob(@Param('jobId') jobId: string) {
+    const job = this.chatService.getJob(jobId);
+    if (!job) {
+      throw new NotFoundException('AI job not found');
+    }
+    return job;
   }
 }

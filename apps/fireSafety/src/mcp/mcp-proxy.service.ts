@@ -1,10 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import OpenAI from 'openai';
-import {
-  ResponseCreateParamsNonStreaming,
-  ResponseCreateParamsStreaming,
-  ResponseStreamEvent,
-} from 'openai/resources/responses/responses';
+import { GoogleGenAI } from '@google/genai';
 import { McpServerService } from './mcp.server';
 import { McpChatContextOptions } from './mcp.types';
 import { getAiConfig, LlmProvider } from '../lib/ai-config';
@@ -45,7 +40,7 @@ export type McpChatStreamChunk =
 @Injectable()
 export class McpProxyService {
   private readonly logger = new Logger(McpProxyService.name);
-  private readonly openAIClient: OpenAI | null;
+  private readonly geminiClient: GoogleGenAI | null;
   private readonly llmProvider: LlmProvider;
   private readonly aiConfig = getAiConfig();
 
@@ -54,8 +49,8 @@ export class McpProxyService {
     private readonly chatSessionRepo: McpChatSessionRepository,
   ) {
     this.llmProvider = this.aiConfig.provider;
-    const apiKey = this.aiConfig.openAiApiKey;
-    this.openAIClient = apiKey ? new OpenAI({ apiKey }) : null;
+    const apiKey = this.aiConfig.geminiApiKey;
+    this.geminiClient = apiKey ? new GoogleGenAI({ apiKey }) : null;
   }
 
   private getLlmTimeoutMs(): number {
@@ -240,7 +235,7 @@ export class McpProxyService {
 
     const preferredProvider = this.llmProvider;
     const fallbackProvider: LlmProvider =
-      preferredProvider === 'openai' ? 'ollama' : 'openai';
+      preferredProvider === 'gemini' ? 'ollama' : 'gemini';
     const fallbackModel = model || this.getDefaultModelForProvider(fallbackProvider);
 
     const persist = async (answer: string, isEmergency: boolean) => {
@@ -294,7 +289,7 @@ export class McpProxyService {
   private getDefaultModelForProvider(provider: LlmProvider): string {
     return provider === 'ollama'
       ? this.aiConfig.ollamaModel
-      : this.aiConfig.openAiModel;
+      : this.aiConfig.geminiModel;
   }
 
   private async *executeStreamChatFlow(
@@ -563,24 +558,30 @@ export class McpProxyService {
       return this.chatWithOllama(ollamaMessages, selectedModel);
     }
 
-    if (!this.openAIClient) {
+    if (!this.geminiClient) {
       throw new Error(
-        'OpenAI is not configured. Set OPENAI_API_KEY in backend environment.',
+        'Gemini is not configured. Set GEMINI_API_KEY in backend environment.',
       );
     }
 
-    const createOptions: ResponseCreateParamsNonStreaming = {
-      model: selectedModel,
-      input: messages,
-      stream: false,
-      ...(jsonMode ? { text: { format: { type: 'json_object' as const } } } : {}),
-    };
+    const systemMsg = messages.find((m) => m.role === 'system');
+    const chatMessages = messages
+      .filter((m) => m.role !== 'system')
+      .map((m) => ({ role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: m.content }] }));
+
+    const config: Record<string, unknown> = {};
+    if (systemMsg) config['systemInstruction'] = systemMsg.content;
+    if (jsonMode) config['responseMimeType'] = 'application/json';
 
     const response = await this.withTimeout(
-      this.openAIClient.responses.create(createOptions),
+      this.geminiClient.models.generateContent({
+        model: selectedModel,
+        contents: chatMessages,
+        config,
+      }),
       this.getLlmTimeoutMs(),
     );
-    return response.output_text || '';
+    return response.text ?? '';
   }
 
   private async *runModelStream(
@@ -597,23 +598,27 @@ export class McpProxyService {
       return;
     }
 
-    if (!this.openAIClient) {
-      yield 'OpenAI not configured.';
+    if (!this.geminiClient) {
+      yield 'Gemini not configured.';
       return;
     }
 
-    const createOptions: ResponseCreateParamsStreaming = {
+    const systemMsg = messages.find((m) => m.role === 'system');
+    const chatMessages = messages
+      .filter((m) => m.role !== 'system')
+      .map((m) => ({ role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: m.content }] }));
+
+    const config: Record<string, unknown> = {};
+    if (systemMsg) config['systemInstruction'] = systemMsg.content;
+
+    const stream = await this.geminiClient.models.generateContentStream({
       model: selectedModel,
-      input: messages,
-      stream: true,
-    };
+      contents: chatMessages,
+      config,
+    });
 
-    const stream = await this.openAIClient.responses.create(createOptions);
-
-    for await (const event of stream) {
-      if (event.type === 'response.output_text.delta') {
-        yield event.delta;
-      }
+    for await (const chunk of stream) {
+      if (chunk.text) yield chunk.text;
     }
   }
 
@@ -759,6 +764,12 @@ export class McpProxyService {
         description:
           'Mark the most recent active, pending, or responding hazard in a building as "resolved". Use when the user says a fire or hazard has been extinguished, cleared, or resolved.',
         argsSchema: { buildingName: 'string', hazardType: 'string (optional)', floorNumber: 'number (optional)' },
+      },
+      {
+        name: 'analyze_camera_stream',
+        description:
+          'Get real-time visual analysis of a specific camera feed using the VLM perception module. Use when the user asks "what are you seeing through cam51?" or requests visual confirmation.',
+        argsSchema: { cameraCode: 'string' },
       },
     ];
   }

@@ -9,6 +9,7 @@ import {
   UpdateFireAlertConfigDto,
 } from '../dto/fire-detection.dto';
 import { FireDetectionGateway } from '../gateways/fire-detection.gateway';
+import { IncidentAgentQueueService } from '../ai/incident/incident-agent-queue.service';
 
 @Injectable()
 export class FireDetectionService implements OnModuleInit, OnModuleDestroy {
@@ -39,7 +40,8 @@ export class FireDetectionService implements OnModuleInit, OnModuleDestroy {
     private nodesRepository: Repository<nodes>,
     @Inject(forwardRef(() => FireDetectionGateway))
     private readonly fireDetectionGateway: FireDetectionGateway,
-  ) {}
+    private readonly incidentAgentQueueService: IncidentAgentQueueService,
+  ) { }
 
   /**
    * Lifecycle hook - start cache cleanup interval on module init
@@ -187,6 +189,42 @@ export class FireDetectionService implements OnModuleInit, OnModuleDestroy {
         detectionLog.alert_triggered = true;
         detectionLog.hazard_id = hazardId;
         await this.fireDetectionLogRepository.save(detectionLog);
+
+        const clipMax = Math.max(
+          ...fireDetections.map((d) =>
+            typeof d.clip_confidence === 'number' ? d.clip_confidence : 0,
+          ),
+          0,
+        );
+        const fireContext =
+          fireDetections.find((d) => d.fire_context)?.fire_context || 'dangerous';
+
+        await this.incidentAgentQueueService.enqueue({
+          hazardId,
+          severity: hazard.severity,
+          chatMessage: `Fire hazard ${hazardId} created for camera ${cam.camera_id}.`,
+          chatContext: {
+            trigger: 'hazard_created',
+            source: 'fire_detection_service',
+            camera_id: cam.camera_id,
+            camera_name: cam.name,
+            building_id: cam.building_id,
+            floor_id: cam.floor_id ?? null,
+            room_id: cam.room_id ?? null,
+            fire_context: fireContext,
+            clip_confidence: clipMax,
+            backend_confidence: maxConfidence,
+            timestamp: alertDto.timestamp,
+          },
+          detectionEvents: fireDetections.map((d) => ({
+            camera_id: cam.camera_id,
+            label: d.label,
+            confidence: d.score,
+            bbox: d.bbox,
+            timestamp: new Date(alertDto.timestamp * 1000).toISOString(),
+          })),
+          frame_b64: alertDto.frame_b64,
+        });
       }
 
       this.logger.log(`Fire alert triggered for camera ${cam.camera_id} in building ${cam.building_id}`);

@@ -26,13 +26,17 @@ import {
   RiskSummaryResult,
   SensorStatsResult,
   SensorsForBuildingResult,
+  SensorsForRoomResult,
   SocietyOverviewResult,
 } from './mcp.types';
+import Redis from 'ioredis';
 
 type ToolArgs = Record<string, unknown> | undefined;
 
 @Injectable()
 export class McpToolsService {
+  private readonly redisClient: Redis;
+
   constructor(
     @InjectRepository(hazards)
     private readonly hazardRepository: Repository<hazards>,
@@ -54,9 +58,15 @@ export class McpToolsService {
     private readonly userRepository: Repository<User>,
     @InjectRepository(Society)
     private readonly societyRepository: Repository<Society>,
-  ) {}
+  ) {
+    const redisHost = process.env.REDIS_HOST || 'localhost';
+    const redisPort = Number(process.env.REDIS_PORT || 6379);
+    this.redisClient = new Redis({ host: redisHost, port: redisPort, lazyConnect: true });
+    this.redisClient.connect().catch(err => console.error('McpToolsService Redis error:', err));
+  }
 
   // ── Private resolvers ────────────────────────────────────────────────────
+
 
   private async resolveBuilding(name: string): Promise<building | null> {
     return this.buildingRepository
@@ -257,6 +267,35 @@ export class McpToolsService {
         return { content: [{ type: 'text', text: JSON.stringify(data) }], structuredContent: data as unknown as Record<string, unknown> };
       },
     );
+    server.registerTool(
+      'get_sensors_for_room',
+      {
+        description:
+          'Return all MQ5/MQ7 gas and smoke sensors in a specific room by roomId, including status and last reading value. Use this to verify visual fire detections with physical sensor data.',
+        inputSchema: {
+          roomId: z.number().int().positive(),
+        },
+      },
+      async ({ roomId }) => {
+        const data = await this.getSensorsForRoom(roomId);
+        return { content: [{ type: 'text', text: JSON.stringify(data) }], structuredContent: data as unknown as Record<string, unknown> };
+      },
+    );
+
+    server.registerTool(
+      'analyze_camera_stream',
+      {
+        description:
+          'Get real-time visual analysis of a specific camera feed using the VLM perception module. Use when the user asks "what are you seeing through cam51?" or requests visual confirmation.',
+        inputSchema: {
+          cameraCode: z.string(),
+        },
+      },
+      async ({ cameraCode }) => {
+        const data = await this.analyzeCameraStream(cameraCode);
+        return { content: [{ type: 'text', text: JSON.stringify(data) }], structuredContent: data as unknown as Record<string, unknown> };
+      },
+    );
   }
 
   // ── executeTool dispatcher ───────────────────────────────────────────────
@@ -311,6 +350,12 @@ export class McpToolsService {
         (args as { buildingName: string; hazardType?: string; floorNumber?: number }).hazardType,
         (args as { buildingName: string; hazardType?: string; floorNumber?: number }).floorNumber,
       );
+
+    if (toolName === 'get_sensors_for_room')
+      return this.getSensorsForRoom((args as { roomId: number }).roomId);
+
+    if (toolName === 'analyze_camera_stream')
+      return this.analyzeCameraStream((args as { cameraCode: string }).cameraCode);
 
     throw new Error(`Unknown MCP tool: ${toolName}`);
   }
@@ -520,6 +565,42 @@ export class McpToolsService {
     return { found: true, buildingName: b.name, total, active, alert, inactive };
   }
 
+  async getSensorsForRoom(roomId: number): Promise<SensorsForRoomResult> {
+    const sensors = await this.sensorRepository.find({ where: { roomId }, order: { createdAt: 'DESC' } });
+
+    if (!sensors.length) {
+      return {
+        found: false,
+        roomId,
+        sensors: [],
+        summary: { total: 0, alert: 0, active: 0, inactive: 0 },
+        message: `No sensors found for roomId=${roomId}.`,
+      };
+    }
+
+    const summary = { total: sensors.length, alert: 0, active: 0, inactive: 0 };
+    sensors.forEach((s) => {
+      if (s.status === 'alert') summary.alert++;
+      else if (s.status === 'active') summary.active++;
+      else summary.inactive++;
+    });
+
+    return {
+      found: true,
+      roomId,
+      summary,
+      sensors: sensors.map((s) => ({
+        id: s.id,
+        name: s.name,
+        type: s.type,
+        status: s.status,
+        value: s.value ?? undefined,
+        unit: s.unit ?? undefined,
+        lastReading: s.lastReading ? new Date(s.lastReading).toISOString() : undefined,
+      })),
+    };
+  }
+
   private async findActiveHazard(buildingId: number, hazardType?: string, floorNumber?: number): Promise<hazards | null> {
     const qb = this.hazardRepository
       .createQueryBuilder('h')
@@ -566,5 +647,52 @@ export class McpToolsService {
     await this.hazardRepository.save(hazard);
 
     return { found: true, hazardId: hazard.id, type: hazard.type, severity: hazard.severity, previousStatus, newStatus: 'resolved', location: `Building: ${b.name}, FloorId: ${hazard.floorId ?? 'unknown'}` };
+  }
+
+  async analyzeCameraStream(cameraCode: string): Promise<unknown> {
+    try {
+      // 1. Get latest frame from Redis
+      const frameKey = `camera:frame:latest:${cameraCode}`;
+      const frameB64 = await this.redisClient.get(frameKey);
+
+      if (!frameB64) {
+        return { found: false, message: `No recent frame available for camera ${cameraCode}. Ensure the camera worker is running and sending frames.` };
+      }
+
+      // 2. Call ignis-AI endpoint
+      const aiUrl = process.env.IGNIS_AI_URL || 'http://localhost:5551';
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 60000);
+
+      const response = await fetch(`${aiUrl}/v1/agentic/respond`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chat_message: `Analyze the visual feed for camera ${cameraCode} and report any hazards or observations. Provide a brief but accurate summary.`,
+          chat_context: { tool: 'analyze_camera_stream', cameraCode },
+          detection_events: [],
+          frame_b64: frameB64,
+        }),
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeout);
+
+      if (!response.ok) {
+        return { found: false, message: `ignis-AI analysis failed: ${response.status} ${response.statusText}` };
+      }
+
+      const result = await response.json() as any;
+
+      return {
+        found: true,
+        cameraCode,
+        analysis: result?.decision?.summary || 'No analysis provided.',
+        severity: result?.decision?.severity || 0,
+        confidence: result?.decision?.confidence || 0,
+      };
+    } catch (err) {
+      return { found: false, message: `Error analyzing camera stream: ${err instanceof Error ? err.message : String(err)}` };
+    }
   }
 }

@@ -217,3 +217,19 @@ export interface HazardActionResult {
   location?: string;
   message?: string;
 }
+
+export interface SensorsForRoomResult {
+  found: boolean;
+  roomId?: number;
+  sensors: Array<{
+    id: number;
+    name: string;
+    type: string;
+    status: string;
+    value?: number;
+    unit?: string;
+    lastReading?: string;
+  }>;
+  summary: { total: number; alert: number; active: number; inactive: number };
+  message?: string;
+}

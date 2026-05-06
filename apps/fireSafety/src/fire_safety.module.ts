@@ -40,6 +40,8 @@ import {
   FireBrigadeState,
   FireBrigadeHQ,
   SensorLog,
+  McpChatSession,
+  McpChatMessage,
 } from '@app/entities';
 import { AuthController } from './controllers/auth.controller';
 import { SensorController } from './controllers/sensor.controller';
@@ -79,6 +81,7 @@ import { NavigationService } from './services/navigation.service';
 import { SensorLogAggregationService } from './services/sensor-log-aggregation.service';
 import { McpModule } from './mcp/mcp.module';
 import { ChatModule } from './chat/chat.module';
+import { IncidentAgentQueueService } from './ai/incident/incident-agent-queue.service';
 
 @Module({
   imports: [
@@ -131,6 +134,8 @@ import { ChatModule } from './chat/chat.module';
       FireBrigadeState,
       FireBrigadeHQ,
       SensorLog,
+      McpChatSession,
+      McpChatMessage,
     ]),
   ],
   controllers: [
@@ -174,6 +179,7 @@ import { ChatModule } from './chat/chat.module';
     EmployeeService,
     ArduinoSensorService,
     SensorLogAggregationService,
+    IncidentAgentQueueService,
   ],
 })
 export class FireSafetyModule {}
