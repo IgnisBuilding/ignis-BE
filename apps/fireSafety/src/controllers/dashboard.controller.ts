@@ -30,7 +30,9 @@ export class DashboardController {
     ] = await Promise.all([
       this.sensorRepo.count(),
       this.sensorRepo.count({ where: { status: 'active' } }),
-      this.sensorRepo.count({ where: { status: 'alert' } }),
+      this.sensorRepo.createQueryBuilder('s')
+        .where('s.alert_threshold IS NOT NULL AND s.value IS NOT NULL AND s.value >= s.alert_threshold')
+        .getCount(),
       this.userRepo.count(),
       this.userRepo.count({ where: { isActive: true } }),
       this.hazardsRepo.count({ where: { status: 'active' } }),
@@ -65,12 +67,16 @@ export class DashboardController {
   @Public()
   async getRecentAlerts() {
     const [alertSensors, activeHazards] = await Promise.all([
-      this.sensorRepo.find({
-        where: [{ status: 'alert' }, { status: 'warning' }],
-        relations: ['room', 'building'],
-        order: { lastReading: 'DESC' },
-        take: 10,
-      }),
+      this.sensorRepo.createQueryBuilder('s')
+        .leftJoinAndSelect('s.room', 'room')
+        .leftJoinAndSelect('s.building', 'building')
+        .where(
+          '(s.alert_threshold IS NOT NULL AND s.value IS NOT NULL AND s.value >= s.alert_threshold)' +
+          ' OR (s.warning_threshold IS NOT NULL AND s.value IS NOT NULL AND s.value >= s.warning_threshold)',
+        )
+        .orderBy('s.last_reading', 'DESC', 'NULLS LAST')
+        .take(10)
+        .getMany(),
       this.hazardsRepo.find({
         where: [{ status: 'active' }, { status: 'pending' }, { status: 'responded' }],
         relations: ['room', 'floor', 'floor.building'],
@@ -112,11 +118,17 @@ export class DashboardController {
         : null,
     }));
 
+    const deriveSensorStatus = (s: Sensor): string => {
+      if (s.alertThreshold != null && s.value != null && s.value >= s.alertThreshold) return 'alert';
+      if (s.warningThreshold != null && s.value != null && s.value >= s.warningThreshold) return 'warning';
+      return s.status;
+    };
+
     const sanitizedSensors = alertSensors.map(s => ({
       id: s.id,
       name: s.name,
       type: s.type,
-      status: s.status,
+      status: deriveSensorStatus(s),
       value: s.value,
       unit: s.unit,
       alertThreshold: s.alertThreshold,
