@@ -1,6 +1,6 @@
 import { Controller, Get, UseGuards } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, DataSource } from 'typeorm';
 import { Sensor, User, hazards, EvacuationRoute, building, camera } from '@app/entities';
 import { JwtAuthGuard } from '../guards/jwt-auth.guard';
 import { Public } from '../decorators/public.decorator';
@@ -15,6 +15,7 @@ export class DashboardController {
     @InjectRepository(EvacuationRoute) private routeRepo: Repository<EvacuationRoute>,
     @InjectRepository(building) private buildingRepo: Repository<building>,
     @InjectRepository(camera) private cameraRepo: Repository<camera>,
+    private dataSource: DataSource,
   ) {}
 
   @Get('stats')
@@ -66,17 +67,23 @@ export class DashboardController {
   @Get('recent-alerts')
   @Public()
   async getRecentAlerts() {
-    const [alertSensors, activeHazards] = await Promise.all([
-      this.sensorRepo.createQueryBuilder('s')
-        .leftJoinAndSelect('s.room', 'room')
-        .leftJoinAndSelect('s.building', 'building')
-        .where(
-          '(s.alert_threshold IS NOT NULL AND s.value IS NOT NULL AND s.value >= s.alert_threshold)' +
-          ' OR (s.warning_threshold IS NOT NULL AND s.value IS NOT NULL AND s.value >= s.warning_threshold)',
-        )
-        .orderBy('s.last_reading', 'DESC', 'NULLS LAST')
-        .take(10)
-        .getMany(),
+    const [rawSensors, activeHazards] = await Promise.all([
+      this.dataSource.query<any[]>(`
+        SELECT
+          s.id, s.name, s.type, s.status, s.value, s.unit,
+          s.alert_threshold  AS "alertThreshold",
+          s.warning_threshold AS "warningThreshold",
+          s.last_reading     AS "lastReading",
+          r.id   AS "roomId",   r.name AS "roomName",
+          b.id   AS "buildingId", b.name AS "buildingName"
+        FROM sensors s
+        LEFT JOIN room r     ON r.id = s.room_id
+        LEFT JOIN building b ON b.id = s.building_id
+        WHERE (s.alert_threshold  IS NOT NULL AND s.value IS NOT NULL AND s.value >= s.alert_threshold)
+           OR (s.warning_threshold IS NOT NULL AND s.value IS NOT NULL AND s.value >= s.warning_threshold)
+        ORDER BY s.last_reading DESC NULLS LAST
+        LIMIT 10
+      `),
       this.hazardsRepo.find({
         where: [{ status: 'active' }, { status: 'pending' }, { status: 'responded' }],
         relations: ['room', 'floor', 'floor.building'],
@@ -118,25 +125,29 @@ export class DashboardController {
         : null,
     }));
 
-    const deriveSensorStatus = (s: Sensor): string => {
-      if (s.alertThreshold != null && s.value != null && s.value >= s.alertThreshold) return 'alert';
-      if (s.warningThreshold != null && s.value != null && s.value >= s.warningThreshold) return 'warning';
-      return s.status;
-    };
-
-    const sanitizedSensors = alertSensors.map(s => ({
-      id: s.id,
-      name: s.name,
-      type: s.type,
-      status: deriveSensorStatus(s),
-      value: s.value,
-      unit: s.unit,
-      alertThreshold: s.alertThreshold,
-      warningThreshold: s.warningThreshold,
-      lastReading: s.lastReading,
-      room: s.room ? { id: s.room.id, name: s.room.name } : null,
-      building: sanitizeBuilding(s.building),
-    }));
+    const sanitizedSensors = rawSensors.map(s => {
+      const val = s.value != null ? parseFloat(s.value) : null;
+      const alertT = s.alertThreshold != null ? parseFloat(s.alertThreshold) : null;
+      const warnT = s.warningThreshold != null ? parseFloat(s.warningThreshold) : null;
+      const status = (alertT != null && val != null && val >= alertT)
+        ? 'alert'
+        : (warnT != null && val != null && val >= warnT)
+          ? 'warning'
+          : s.status;
+      return {
+        id: s.id,
+        name: s.name,
+        type: s.type,
+        status,
+        value: val,
+        unit: s.unit,
+        alertThreshold: alertT,
+        warningThreshold: warnT,
+        lastReading: s.lastReading,
+        room: s.roomId ? { id: s.roomId, name: s.roomName } : null,
+        building: s.buildingId ? { id: s.buildingId, name: s.buildingName } : null,
+      };
+    });
 
     return { sensors: sanitizedSensors, hazards: sanitizedHazards };
   }
