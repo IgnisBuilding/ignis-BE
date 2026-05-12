@@ -2246,10 +2246,20 @@ export class BuildingController {
         await queryRunner.query(`UPDATE sensors SET building_id = NULL WHERE building_id = $1`, [id]);
       }
 
-      // 22. Delete records with NOT NULL FKs to floor/building before deleting them
-      await queryRunner.query(`DELETE FROM user_position_history WHERE building_id = $1`, [id]);
-      await queryRunner.query(`DELETE FROM user_positions WHERE building_id = $1`, [id]);
-      await queryRunner.query(`DELETE FROM navigation_sessions WHERE building_id = $1`, [id]);
+      // 22. Delete records with NOT NULL FKs to floor/building before deleting them.
+      // Use subquery for floor_id so mismatched building_id/floor_id data is also caught.
+      await queryRunner.query(
+        `DELETE FROM user_position_history WHERE building_id = $1 OR floor_id IN (SELECT id FROM floor WHERE building_id = $1)`,
+        [id],
+      );
+      await queryRunner.query(
+        `DELETE FROM user_positions WHERE building_id = $1 OR floor_id IN (SELECT id FROM floor WHERE building_id = $1)`,
+        [id],
+      );
+      await queryRunner.query(
+        `DELETE FROM navigation_sessions WHERE building_id = $1 OR start_floor_id IN (SELECT id FROM floor WHERE building_id = $1)`,
+        [id],
+      );
       await queryRunner.query(`DELETE FROM fingerprints WHERE building_id = $1`, [id]);
 
       // 23. Delete floors (FK → building)
