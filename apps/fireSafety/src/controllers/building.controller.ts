@@ -2185,6 +2185,28 @@ export class BuildingController {
         // 15. Delete openings (FK → floor, nodes)
         await queryRunner.query(`DELETE FROM opening WHERE floor_id = ANY($1)`, [floorIds]);
 
+        // 15a. Nullify nullable FK references to nodes before deleting them
+        await queryRunner.query(
+          `UPDATE user_position_history SET node_id = NULL WHERE node_id IN (SELECT id FROM nodes WHERE floor_id = ANY($1))`,
+          [floorIds],
+        );
+        await queryRunner.query(
+          `UPDATE user_positions SET nearest_node_id = NULL WHERE nearest_node_id IN (SELECT id FROM nodes WHERE floor_id = ANY($1))`,
+          [floorIds],
+        );
+        await queryRunner.query(
+          `UPDATE fingerprints SET node_id = NULL WHERE node_id IN (SELECT id FROM nodes WHERE floor_id = ANY($1))`,
+          [floorIds],
+        );
+        await queryRunner.query(
+          `UPDATE navigation_sessions SET start_node_id = NULL WHERE start_node_id IN (SELECT id FROM nodes WHERE floor_id = ANY($1))`,
+          [floorIds],
+        );
+        await queryRunner.query(
+          `UPDATE navigation_sessions SET destination_node_id = NULL WHERE destination_node_id IN (SELECT id FROM nodes WHERE floor_id = ANY($1))`,
+          [floorIds],
+        );
+
         // 16. Delete nodes (FK → room, floor, apartment)
         await queryRunner.query(`DELETE FROM nodes WHERE floor_id = ANY($1)`, [floorIds]);
 
@@ -2224,10 +2246,16 @@ export class BuildingController {
         await queryRunner.query(`UPDATE sensors SET building_id = NULL WHERE building_id = $1`, [id]);
       }
 
-      // 22. Delete floors (FK → building)
+      // 22. Delete records with NOT NULL FKs to floor/building before deleting them
+      await queryRunner.query(`DELETE FROM user_position_history WHERE building_id = $1`, [id]);
+      await queryRunner.query(`DELETE FROM user_positions WHERE building_id = $1`, [id]);
+      await queryRunner.query(`DELETE FROM navigation_sessions WHERE building_id = $1`, [id]);
+      await queryRunner.query(`DELETE FROM fingerprints WHERE building_id = $1`, [id]);
+
+      // 23. Delete floors (FK → building)
       await queryRunner.query(`DELETE FROM floor WHERE building_id = $1`, [id]);
 
-      // 23. Delete the building itself
+      // 24. Delete the building itself
       await queryRunner.query(`DELETE FROM building WHERE id = $1`, [id]);
 
       await queryRunner.commitTransaction();
