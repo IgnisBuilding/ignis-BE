@@ -50,6 +50,9 @@ export class building {
   @Column({ name: 'floor_plan_image', type: 'text', nullable: true })
   floorPlanImage: string; // Base64 encoded floor plan image
 
+  @Column({ name: 'building_image', type: 'text', nullable: true })
+  buildingImage: string; // Base64 encoded building photo
+
   @Column({ name: 'editor_state', type: 'jsonb', nullable: true })
   editorState: any; // Complete editor state (rooms, openings, cameras, calibration, etc.)
 

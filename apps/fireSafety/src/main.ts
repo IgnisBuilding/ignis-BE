@@ -1,6 +1,7 @@
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { Logger, ValidationPipe, LogLevel } from '@nestjs/common';
+import { json, urlencoded } from 'express';
 
 async function bootstrap() {
   const logLevels = (process.env.NEST_LOG_LEVELS || 'warn,error')
@@ -10,7 +11,12 @@ async function bootstrap() {
 
   const app = await NestFactory.create(AppModule, {
     logger: logLevels,
+    bodyParser: false, // disable default 100 KB limit; we set our own below
   });
+
+  // Raised limit required for floor-plan saves (base64 image + editor state)
+  app.use(json({ limit: '50mb' }));
+  app.use(urlencoded({ limit: '50mb', extended: true }));
 
   // Enable CORS for all origins
   app.enableCors({

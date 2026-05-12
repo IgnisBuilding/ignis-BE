@@ -422,6 +422,7 @@ export class BuildingController {
       has_floor_plan: b.hasFloorPlan || false,
       floor_plan_updated_at: b.floorPlanUpdatedAt,
       created_at: b.created_at,
+      has_building_image: !!b.buildingImage,
     }));
   }
 
@@ -1287,6 +1288,14 @@ export class BuildingController {
     };
   }
 
+  @Get(':id/image')
+  @Public()
+  async getBuildingImage(@Param('id', ParseIntPipe) id: number) {
+    const building = await this.buildingRepo.findOne({ where: { id } });
+    if (!building) return { building_image: null };
+    return { building_image: building.buildingImage || null };
+  }
+
   @Post(':id/import-floor-plan')
   @Public()
   async importFloorPlan(
@@ -1423,6 +1432,8 @@ export class BuildingController {
         await queryRunner.query(`DELETE FROM trapped_occupants WHERE node_id IN (SELECT id FROM nodes WHERE floor_id = ANY($1))`, [allFloorIds]);
         await queryRunner.query(`DELETE FROM evacuation_route WHERE start_node_id IN (SELECT id FROM nodes WHERE floor_id = ANY($1)) OR end_node_id IN (SELECT id FROM nodes WHERE floor_id = ANY($1))`, [allFloorIds]);
         await queryRunner.query(`DELETE FROM edges WHERE source_id IN (SELECT id FROM nodes WHERE floor_id = ANY($1)) OR target_id IN (SELECT id FROM nodes WHERE floor_id = ANY($1))`, [allFloorIds]);
+        await queryRunner.query(`UPDATE user_position_history SET node_id = NULL WHERE node_id IN (SELECT id FROM nodes WHERE floor_id = ANY($1))`, [allFloorIds]);
+        await queryRunner.query(`UPDATE user_positions SET nearest_node_id = NULL WHERE nearest_node_id IN (SELECT id FROM nodes WHERE floor_id = ANY($1))`, [allFloorIds]);
         await queryRunner.query(`DELETE FROM nodes WHERE floor_id = ANY($1)`, [allFloorIds]);
         await queryRunner.query(`DELETE FROM opening_rooms WHERE opening_id IN (SELECT id FROM opening WHERE floor_id = ANY($1))`, [allFloorIds]);
         await queryRunner.query(`DELETE FROM opening WHERE floor_id = ANY($1)`, [allFloorIds]);
@@ -1924,6 +1935,7 @@ export class BuildingController {
     society_id?: number;
     total_floors?: number;
     apartments_per_floor?: number;
+    building_image?: string | null;
   }) {
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
@@ -1943,6 +1955,7 @@ export class BuildingController {
         totalFloors: totalFloors,
         apartmentsPerFloor: apartmentsPerFloor,
         hasFloorPlan: false,
+        ...(createDto.building_image ? { buildingImage: createDto.building_image } : {}),
       });
       const savedBuilding = await queryRunner.manager.save(newBuilding);
 
@@ -1996,6 +2009,8 @@ export class BuildingController {
       apartments_per_floor?: number;
       totalFloors?: number;
       apartmentsPerFloor?: number;
+      building_image?: string | null;
+      buildingImage?: string | null;
     },
   ) {
     // Map snake_case to camelCase for entity properties
@@ -2013,11 +2028,18 @@ export class BuildingController {
     if (totalFloors !== undefined) mappedDto.totalFloors = totalFloors;
     if (apartmentsPerFloor !== undefined) mappedDto.apartmentsPerFloor = apartmentsPerFloor;
 
+    const buildingImage = updateDto.building_image ?? updateDto.buildingImage;
+    if (buildingImage !== undefined) mappedDto.buildingImage = buildingImage;
+
     if (Object.keys(mappedDto).length > 0) {
       await this.buildingRepo.update(id, mappedDto);
     }
 
-    return this.buildingRepo.findOne({ where: { id } });
+    const updated = await this.buildingRepo.findOne({ where: { id } });
+    if (!updated) return null;
+    // Omit large base64 fields from the response to keep it lightweight
+    const { floorPlanImage: _fp, buildingImage: _bi, editorState: _es, ...rest } = updated as any;
+    return { ...rest, has_building_image: !!updated.buildingImage };
   }
 
   @Delete(':id')
@@ -2701,6 +2723,15 @@ export class BuildingController {
         );
         await queryRunner.query(
           `DELETE FROM edges WHERE source_id IN (SELECT id FROM nodes WHERE floor_id = ANY($1) AND (node_category IS NULL OR node_category != 'safe_point')) OR target_id IN (SELECT id FROM nodes WHERE floor_id = ANY($1) AND (node_category IS NULL OR node_category != 'safe_point'))`,
+          [allFloorIds]
+        );
+        // NULL out FK references in position tracking tables before deleting nodes
+        await queryRunner.query(
+          `UPDATE user_position_history SET node_id = NULL WHERE node_id IN (SELECT id FROM nodes WHERE floor_id = ANY($1) AND (node_category IS NULL OR node_category != 'safe_point'))`,
+          [allFloorIds]
+        );
+        await queryRunner.query(
+          `UPDATE user_positions SET nearest_node_id = NULL WHERE nearest_node_id IN (SELECT id FROM nodes WHERE floor_id = ANY($1) AND (node_category IS NULL OR node_category != 'safe_point'))`,
           [allFloorIds]
         );
         await queryRunner.query(
