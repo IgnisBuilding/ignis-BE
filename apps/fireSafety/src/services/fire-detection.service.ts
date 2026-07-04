@@ -37,6 +37,8 @@ export class FireDetectionService implements OnModuleInit, OnModuleDestroy {
   private readonly sensorCameraConfirmWindowSeconds = Number(
     process.env.SENSOR_CAMERA_CONFIRM_WINDOW_SECONDS || 60,
   );
+  private readonly fireDetectMode = (process.env.FIRE_DETECT_MODE || 'camera-only').toLowerCase();
+  private readonly cameraOnlyMode = this.fireDetectMode === 'camera-only';
 
   constructor(
     @InjectRepository(camera)
@@ -168,8 +170,13 @@ export class FireDetectionService implements OnModuleInit, OnModuleDestroy {
       detectionLog.alert_triggered = true;
       await this.fireDetectionLogRepository.save(detectionLog);
 
-      // 7. Check DB-based AND logic: hazard only if sensor also recently alerted
-      const hazardId = await this.checkAndLogic(cam.room_id, cam.building_id);
+      // 7. Create the hazard immediately in camera-only mode; otherwise require
+      //    the existing camera + sensor confirmation flow.
+      const hazardId = this.cameraOnlyMode
+        ? await this.checkAndLogic(cam.room_id, cam.building_id, {
+            requireSensorConfirmation: false,
+          })
+        : await this.checkAndLogic(cam.room_id, cam.building_id);
 
       if (hazardId) {
         this.logger.log(`Fire alert triggered for camera ${cam.camera_id} in building ${cam.building_id}`);
@@ -189,13 +196,17 @@ export class FireDetectionService implements OnModuleInit, OnModuleDestroy {
       }
 
       this.logger.warn(
-        `Camera fire detection for ${cam.camera_id} logged; awaiting sensor confirmation in same location`,
+        this.cameraOnlyMode
+          ? `Camera fire detection for ${cam.camera_id} logged; hazard was not created because a duplicate/cooldown guard blocked it`
+          : `Camera fire detection for ${cam.camera_id} logged; awaiting sensor confirmation in same location`,
       );
       return {
         received: true,
         logged: true,
         alert_triggered: false,
-        reason: 'Camera criteria met, awaiting sensor confirmation',
+        reason: this.cameraOnlyMode
+          ? 'Camera criteria met, but hazard creation was blocked by duplicate/cooldown guards'
+          : 'Camera criteria met, awaiting sensor confirmation',
         camera: {
           id: cam.id,
           name: cam.name,
@@ -319,8 +330,13 @@ export class FireDetectionService implements OnModuleInit, OnModuleDestroy {
    * if not already present; emits the fire-detected WebSocket event.
    * Called from both the camera path (processAlert) and the sensor path (handleReading).
    */
-  async checkAndLogic(roomId?: number | null, buildingId?: number | null): Promise<number | null> {
+  async checkAndLogic(
+    roomId?: number | null,
+    buildingId?: number | null,
+    options?: { requireSensorConfirmation?: boolean },
+  ): Promise<number | null> {
     if (!roomId && !buildingId) return null;
+    const requireSensorConfirmation = options?.requireSensorConfirmation !== false;
 
     const callTag = `[AND room=${roomId ?? '-'} bld=${buildingId ?? '-'}]`;
 
@@ -419,37 +435,39 @@ export class FireDetectionService implements OnModuleInit, OnModuleDestroy {
       `${callTag} found armed camera log id=${cameraLogId} cam=${cameraLogCameraId} conf=${cameraLogConfidence}`,
     );
 
-    // Step 2: Find sensors in this building/room, then look up recent isAlert log.
-    // Use OR-based filter (room OR building) — same rationale as the camera query above.
-    // A sensor created via Map Editor often has roomId but no buildingId (or vice versa);
-    // the strict-AND form was missing rows and producing the false "awaiting sensor
-    // confirmation" response even when sensor_log clearly had is_alert=true rows.
-    // Use raw SQL with NOW() for the time check to avoid TypeORM/pg local-time
-    // serialization clashing with PostgreSQL UTC.
-    const sensorWhere: any[] = [];
-    if (roomId) sensorWhere.push({ roomId });
-    if (effectiveBuildingId) sensorWhere.push({ buildingId: effectiveBuildingId });
-    const sensors = await this.sensorRepository.find({
-      where: sensorWhere,
-      select: ['id'],
-    });
-    if (sensors.length === 0) {
-      this.logger.warn(
-        `${callTag} no sensors found for location — sensor_agent readings cannot match. Check sensor.roomId/buildingId in DB.`,
+    if (requireSensorConfirmation) {
+      // Step 2: Find sensors in this building/room, then look up recent isAlert log.
+      // Use OR-based filter (room OR building) — same rationale as the camera query above.
+      // A sensor created via Map Editor often has roomId but no buildingId (or vice versa);
+      // the strict-AND form was missing rows and producing the false "awaiting sensor
+      // confirmation" response even when sensor_log clearly had is_alert=true rows.
+      // Use raw SQL with NOW() for the time check to avoid TypeORM/pg local-time
+      // serialization clashing with PostgreSQL UTC.
+      const sensorWhere: any[] = [];
+      if (roomId) sensorWhere.push({ roomId });
+      if (effectiveBuildingId) sensorWhere.push({ buildingId: effectiveBuildingId });
+      const sensors = await this.sensorRepository.find({
+        where: sensorWhere,
+        select: ['id'],
+      });
+      if (sensors.length === 0) {
+        this.logger.warn(
+          `${callTag} no sensors found for location — sensor_agent readings cannot match. Check sensor.roomId/buildingId in DB.`,
+        );
+        return null;
+      }
+      this.logger.log(`${callTag} matched ${sensors.length} sensor(s) for location`);
+
+      const sensorIds = sensors.map((s) => s.id);
+      const sensorRows: { id: number }[] = await this.sensorLogRepository.query(
+        `SELECT id FROM sensor_log WHERE sensor_id = ANY($1) AND is_alert = true AND created_at > NOW() - ($2 * INTERVAL '1 second') ORDER BY created_at DESC LIMIT 1`,
+        [sensorIds, this.sensorCameraConfirmWindowSeconds],
       );
-      return null;
-    }
-    this.logger.log(`${callTag} matched ${sensors.length} sensor(s) for location`);
 
-    const sensorIds = sensors.map((s) => s.id);
-    const sensorRows: { id: number }[] = await this.sensorLogRepository.query(
-      `SELECT id FROM sensor_log WHERE sensor_id = ANY($1) AND is_alert = true AND created_at > NOW() - ($2 * INTERVAL '1 second') ORDER BY created_at DESC LIMIT 1`,
-      [sensorIds, this.sensorCameraConfirmWindowSeconds],
-    );
-
-    if (sensorRows.length === 0) {
-      this.logger.log(`${callTag} no recent sensor alert → skip`);
-      return null;
+      if (sensorRows.length === 0) {
+        this.logger.log(`${callTag} no recent sensor alert → skip`);
+        return null;
+      }
     }
 
     // Both confirmed — fetch camera for hazard creation and duplicate guards.
