@@ -1,0 +1,41 @@
+{
+  "startedAt": "2026-05-12T13:15:22.953Z",
+  "baseUrl": "http://localhost:4000",
+  "socketUrl": "http://localhost:4000",
+  "results": {
+    "dbHealth": {
+      "ok": true,
+      "durationMs": 1596,
+      "buildingId": 46,
+      "cameraId": "B46_CAM001",
+      "nodeId": 691,
+      "nodeId2": 692
+    },
+    "fireDetection": {
+      "ok": false,
+      "durationMs": 1248,
+      "error": "fire-detection failed with status 500"
+    },
+    "routing": {
+      "ok": false,
+      "durationMs": 1106,
+      "error": "routing failed with status 400"
+    },
+    "socketFire": {
+      "ok": false,
+      "durationMs": 6213,
+      "error": "timeout waiting fire.detected"
+    },
+    "socketPosition": {
+      "ok": false,
+      "durationMs": 6114,
+      "error": "timeout waiting evacuee.position"
+    },
+    "arduinoParse": {
+      "ok": true,
+      "durationMs": 1,
+      "passed": 3
+    }
+  },
+  "finishedAt": "2026-05-12T13:15:39.233Z"
+}
