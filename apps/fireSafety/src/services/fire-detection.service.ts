@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException, Logger, Inject, forwardRef, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, In } from 'typeorm';
+import { Repository, In, Not, IsNull } from 'typeorm';
+import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import * as http from 'http';
 import * as https from 'https';
 import { camera, fire_detection_log, fire_alert_config, hazards, nodes, SensorLog, Sensor } from '@app/entities';
@@ -19,6 +20,9 @@ export class FireDetectionService implements OnModuleInit, OnModuleDestroy {
 
   // In-memory cache for consecutive detection tracking
   private consecutiveDetections: Map<string, { count: number; lastTimestamp: number }> = new Map();
+
+  // Supabase client for storage management
+  private supabase: SupabaseClient | null = null;
 
   // Per-location throttle for fire.detected WS emits.  Even when AND logic legitimately
   // produces a new hazard, never re-emit fire.detected for the same room/floor within
@@ -64,6 +68,17 @@ export class FireDetectionService implements OnModuleInit, OnModuleDestroy {
    */
   onModuleInit() {
     this.startCacheCleanup();
+    
+    // Initialize Supabase client
+    const supabaseUrl = process.env.SUPABASE_URL;
+    const supabaseKey = process.env.SUPABASE_SERVICE_KEY;
+    if (supabaseUrl && supabaseKey) {
+      this.supabase = createClient(supabaseUrl, supabaseKey);
+      this.logger.log('Supabase client initialized for storage cleanup');
+    } else {
+      this.logger.warn('SUPABASE_URL or SUPABASE_SERVICE_KEY not set. Image cleanup will not work.');
+    }
+    
     this.logger.log('FireDetectionService initialized with cache cleanup interval');
   }
 
@@ -649,7 +664,69 @@ export class FireDetectionService implements OnModuleInit, OnModuleDestroy {
       image: imageBase64,
     });
 
-    return this.hazardRepository.save(hazard);
+    const savedHazard = await this.hazardRepository.save(hazard);
+    
+    // Trigger cleanup asynchronously
+    this.cleanupOldHazardsImages().catch(err => 
+      this.logger.error(`Failed to execute cleanupOldHazardsImages: ${err}`)
+    );
+
+    return savedHazard;
+  }
+
+  /**
+   * Automatically deletes old images from Supabase Storage when the 
+   * number of hazards with images exceeds the limit.
+   */
+  private async cleanupOldHazardsImages() {
+    if (!this.supabase) return;
+
+    try {
+      const count = await this.hazardRepository.count({
+        where: { image: Not(IsNull()) }
+      });
+      
+      if (count > 19000) {
+        this.logger.log(`Storage limit approached (${count} hazards with images). Cleaning up oldest 1000...`);
+        const oldestHazards = await this.hazardRepository.find({
+          where: { image: Not(IsNull()) },
+          order: { created_at: 'ASC' },
+          take: 1000,
+          select: ['id', 'image']
+        });
+        
+        if (oldestHazards.length > 0) {
+          // Extract filenames from URLs
+          const filesToDelete = oldestHazards
+            .map(h => {
+              try {
+                const urlParts = h.image.split('/');
+                return urlParts[urlParts.length - 1];
+              } catch (e) {
+                return null;
+              }
+            })
+            .filter(Boolean) as string[];
+            
+          // Delete from Supabase Storage
+          if (filesToDelete.length > 0) {
+            const { error } = await this.supabase.storage.from('fire_frames').remove(filesToDelete);
+            if (error) {
+              this.logger.error(`Supabase storage deletion error: ${error.message}`);
+            } else {
+              this.logger.log(`Successfully deleted ${filesToDelete.length} files from Supabase storage.`);
+            }
+          }
+          
+          // Clear image column in database
+          const idsToUpdate = oldestHazards.map(h => h.id);
+          await this.hazardRepository.update(idsToUpdate, { image: null as any });
+          this.logger.log(`Cleared image column for ${idsToUpdate.length} oldest hazards.`);
+        }
+      }
+    } catch (error) {
+      this.logger.error(`Error in cleanupOldHazardsImages: ${error}`);
+    }
   }
 
   /**
