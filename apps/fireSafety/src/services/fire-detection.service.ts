@@ -170,6 +170,7 @@ export class FireDetectionService implements OnModuleInit, OnModuleDestroy {
       detectionLog.alert_triggered = true;
       await this.fireDetectionLogRepository.save(detectionLog);
 
+<<<<<<< Updated upstream
       // 7. Create the hazard immediately in camera-only mode; otherwise require
       //    the existing camera + sensor confirmation flow.
       const hazardId = this.cameraOnlyMode
@@ -177,6 +178,10 @@ export class FireDetectionService implements OnModuleInit, OnModuleDestroy {
             requireSensorConfirmation: false,
           })
         : await this.checkAndLogic(cam.room_id, cam.building_id);
+=======
+      // 7. Check DB-based AND logic: hazard only if sensor also recently alerted
+      const hazardId = await this.checkAndLogic(cam.room_id, cam.building_id, alertDto.image_base64);
+>>>>>>> Stashed changes
 
       if (hazardId) {
         this.logger.log(`Fire alert triggered for camera ${cam.camera_id} in building ${cam.building_id}`);
@@ -330,11 +335,15 @@ export class FireDetectionService implements OnModuleInit, OnModuleDestroy {
    * if not already present; emits the fire-detected WebSocket event.
    * Called from both the camera path (processAlert) and the sensor path (handleReading).
    */
+<<<<<<< Updated upstream
   async checkAndLogic(
     roomId?: number | null,
     buildingId?: number | null,
     options?: { requireSensorConfirmation?: boolean },
   ): Promise<number | null> {
+=======
+  async checkAndLogic(roomId?: number | null, buildingId?: number | null, imageBase64?: string): Promise<number | null> {
+>>>>>>> Stashed changes
     if (!roomId && !buildingId) return null;
     const requireSensorConfirmation = options?.requireSensorConfirmation !== false;
 
@@ -562,6 +571,7 @@ export class FireDetectionService implements OnModuleInit, OnModuleDestroy {
       return null;
     }
 
+<<<<<<< Updated upstream
     // Per-location WS throttle: if we just emitted fire.detected for this room/floor very
     // recently, don't emit again even though we're about to create a new hazard.
     // The hazard still gets created (so the map auto-place flow works) but the alarm
@@ -571,6 +581,9 @@ export class FireDetectionService implements OnModuleInit, OnModuleDestroy {
     const sinceLastEmit = Date.now() - lastEmit;
 
     const hazard = await this.createFireHazard(cam, cameraLogConfidence);
+=======
+    const hazard = await this.createFireHazard(cam, cameraLogConfidence, imageBase64);
+>>>>>>> Stashed changes
 
     // Consume the camera log — mark it as used so future checkAndLogic calls skip it
     await this.fireDetectionLogRepository.query(
@@ -619,7 +632,7 @@ export class FireDetectionService implements OnModuleInit, OnModuleDestroy {
   /**
    * Create a fire hazard with location data from camera
    */
-  private async createFireHazard(cam: camera, confidence: number): Promise<hazards> {
+  private async createFireHazard(cam: camera, confidence: number, imageBase64?: string): Promise<hazards> {
     const severity = confidence >= 0.9 ? 'critical' : confidence >= 0.8 ? 'high' : 'medium';
 
     // Resolve node_id: use camera's nodeId, or look up a node in the camera's room
@@ -645,6 +658,7 @@ export class FireDetectionService implements OnModuleInit, OnModuleDestroy {
       roomId: cam.room_id ?? undefined,
       floorId: cam.floor_id ?? undefined,
       nodeId: nodeId,
+      image: imageBase64,
     });
 
     return this.hazardRepository.save(hazard);

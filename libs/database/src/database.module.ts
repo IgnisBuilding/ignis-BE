@@ -39,6 +39,8 @@ import { Fingerprint } from './entities/fingerprint.entity';
 import { UserSettings } from './entities/user-settings.entity';
 
 const DB_LOGGING = (process.env.DB_LOGGING || 'false').toLowerCase() === 'true';
+const DB_SSL = (process.env.DB_SSL || 'false').toLowerCase() === 'true';
+const DB_SSL_CONFIG = DB_SSL ? { rejectUnauthorized: false } : false;
 
 @Module({
   imports: [
@@ -52,7 +54,7 @@ const DB_LOGGING = (process.env.DB_LOGGING || 'false').toLowerCase() === 'true';
       username: process.env.DB_USER,
       password: process.env.DB_PASS,
       database: process.env.DB_NAME,
-      ssl: { rejectUnauthorized: false },
+      ssl: DB_SSL_CONFIG,
       entities: [
         Society,
         Notification,

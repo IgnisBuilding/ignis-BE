@@ -4,6 +4,9 @@ import * as dotenv from 'dotenv';
 // Load environment variables
 dotenv.config();
 
+const DB_SSL = (process.env.DB_SSL || 'false').toLowerCase() === 'true';
+const DB_SSL_CONFIG = DB_SSL ? { rejectUnauthorized: false } : false;
+
 export const AppDataSource = new DataSource({
   type: 'postgres',
   host: process.env.DB_HOST,
@@ -11,7 +14,7 @@ export const AppDataSource = new DataSource({
   username: process.env.DB_USER,
   password: process.env.DB_PASS,
   database: process.env.DB_NAME,
-  ssl: { rejectUnauthorized: false },
+  ssl: DB_SSL_CONFIG,
   entities: [__dirname + '/entities/*{.ts,.js}'],
   migrations: [__dirname + '/migrations/*{.ts,.js}'],
   synchronize: false,

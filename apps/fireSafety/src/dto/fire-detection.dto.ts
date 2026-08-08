@@ -46,6 +46,10 @@ export class FireDetectionAlertDto {
   @IsNumber()
   @IsOptional()
   latency?: number; // Inference latency in seconds
+
+  @IsString()
+  @IsOptional()
+  image_base64?: string; // Optional base64 encoded image frame
 }
 
 // Response from fire detection alert endpoint

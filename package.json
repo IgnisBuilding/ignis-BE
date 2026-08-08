@@ -6,7 +6,8 @@
   "private": true,
   "license": "UNLICENSED",
   "scripts": {
-    "prestart:dev": "echo starting...",    "build": "nest build",
+    "prestart:dev": "echo starting...",
+    "build": "nest build",
     "format": "prettier --write \"apps/**/*.ts\" \"libs/**/*.ts\"",
     "start": "nest start",
     "start:dev": "nest start --watch",
@@ -24,7 +25,8 @@
     "migrate:up": "typeorm-ts-node-commonjs migration:run -d ./data_source.ts",
     "migrate:down": "typeorm-ts-node-commonjs migration:revert -d ./data_source.ts",
     "migrate:status": "psql -U postgres -d ignis -c \"SELECT name FROM typeorm_migrations ORDER BY id DESC;\"",
-    "bridge:device": "node ../device-bridge/device-bridge.js"
+    "bridge:device": "node ../device-bridge/device-bridge.js",
+    "test:pack": "node test-pack/run-all.mjs"
   },
   "dependencies": {
     "@nestjs/common": "^11.1.7",
@@ -49,6 +51,7 @@
     "rxjs": "^7.8.1",
     "serialport": "^12.0.0",
     "socket.io": "^4.6.1",
+    "socket.io-client": "^4.8.1",
     "typeorm": "^0.3.26"
   },
   "devDependencies": {
